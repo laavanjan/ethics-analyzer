@@ -1,0 +1,13 @@
+[project]
+name = "ethics-analyzer"
+version = "0.1.0"
+description = "AI-powered GitHub code ethics analyzer detecting bias, fairness issues, and responsible AI violations in repositories."
+authors = [
+    { name = "laavanjan", email = "laavanjanlaa@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pygithub>=2.8.1",
+    "python-dotenv>=1.2.1",
+]
