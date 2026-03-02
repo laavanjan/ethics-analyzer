@@ -6,13 +6,20 @@ from typing import Optional, List, Dict
 from github import Auth, Github
 from dotenv import load_dotenv
 from ethics_analyzer import EthicsAnalyzer
+
 load_dotenv()
+
+# Focus profiles for user selection
+FOCUS_PROFILES = {
+    "1": ["P1", "P2", "P3"],                 # Responsibility & management
+    "2": ["P4", "P5", "P6", "P7", "P8"],     # Data safety & security
+    "3": ["P9", "P10", "P11"],               # Understanding, accessibility, impact
+}
 
 
 class GitHubConnector:
     """Connect to GitHub and fetch repository data for ethics analysis."""
     
-    # Supported file extensions for different languages
     SUPPORTED_LANGUAGES = {
         'python': ['.py'],
         'javascript': ['.js', '.jsx', '.ts', '.tsx'],
@@ -25,17 +32,10 @@ class GitHubConnector:
         'ruby': ['.rb'],
         'swift': ['.swift'],
         'kotlin': ['.kt'],
-        'scala': ['.scala']
+        'scala': ['.scala'],
     }
     
     def __init__(self, access_token: Optional[str] = None):
-        """
-        Initialize GitHub connection.
-        
-        Args:
-            access_token: GitHub personal access token. 
-                         If None, reads from GITHUB_TOKEN env variable.
-        """
         token = access_token or os.getenv('GITHUB_TOKEN')
         if not token:
             raise ValueError("GitHub token required. Set GITHUB_TOKEN env variable or pass token.")
@@ -46,15 +46,6 @@ class GitHubConnector:
         print(f"✓ Connected as: {self.user.login}")
     
     def get_repository(self, repo_full_name: str):
-        """
-        Fetch a repository object.
-        
-        Args:
-            repo_full_name: Repository in format 'owner/repo'
-            
-        Returns:
-            Repository object
-        """
         try:
             repo = self.github.get_repo(repo_full_name)
             print(f"✓ Found repository: {repo.full_name}")
@@ -67,27 +58,13 @@ class GitHubConnector:
             return None
     
     def get_all_extensions(self) -> List[str]:
-        """Get all supported file extensions."""
         extensions = []
         for lang_extensions in self.SUPPORTED_LANGUAGES.values():
             extensions.extend(lang_extensions)
         return extensions
     
     def list_code_files(self, repo, languages: Optional[List[str]] = None):
-        """
-        List all code files in a repository (supports multiple languages).
-        
-        Args:
-            repo: Repository object
-            languages: List of languages to scan. If None, scans all supported languages.
-                      Options: 'python', 'javascript', 'java', 'cpp', 'csharp', 'go', etc.
-        
-        Returns:
-            Dictionary with file paths grouped by language
-        """
-        # Determine which extensions to look for
         if languages:
-            # Only get extensions for selected languages
             target_extensions = []
             target_langs = []
             for lang in languages:
@@ -95,10 +72,8 @@ class GitHubConnector:
                 if lang_lower in self.SUPPORTED_LANGUAGES:
                     target_extensions.extend(self.SUPPORTED_LANGUAGES[lang_lower])
                     target_langs.append(lang_lower)
-            
             print(f"\n🔍 Scanning for {', '.join(target_langs)} files with extensions: {', '.join(target_extensions)}")
         else:
-            # Scan all languages
             target_extensions = self.get_all_extensions()
             target_langs = list(self.SUPPORTED_LANGUAGES.keys())
             print(f"\n🔍 Scanning for all supported languages")
@@ -108,31 +83,26 @@ class GitHubConnector:
         
         try:
             contents = repo.get_contents("")
-            
             while contents:
                 file_content = contents.pop(0)
                 if file_content.type == "dir":
                     try:
                         contents.extend(repo.get_contents(file_content.path))
-                    except:
-                        pass  # Skip directories we can't access
+                    except Exception:
+                        pass
                 else:
-                    # Check if file matches any of the TARGET extensions
                     for ext in target_extensions:
                         if file_content.name.endswith(ext):
-                            # Find which language this extension belongs to
                             for lang in target_langs:
                                 if ext in self.SUPPORTED_LANGUAGES[lang]:
                                     code_files[lang].append(file_content.path)
                                     total_files += 1
                                     print(f"  Found: {file_content.path} ({lang})")
                                     break
-                            break  # Stop checking other extensions once we found a match
-        
+                            break
         except Exception as e:
             print(f"✗ Error scanning repository: {e}")
         
-        # Remove empty languages
         code_files = {lang: files for lang, files in code_files.items() if files}
         
         if total_files == 0:
@@ -145,29 +115,10 @@ class GitHubConnector:
         return code_files
     
     def list_python_files(self, repo):
-        """
-        List all Python files in a repository (legacy method).
-        
-        Args:
-            repo: Repository object
-            
-        Returns:
-            List of file paths
-        """
         code_files = self.list_code_files(repo, languages=['python'])
         return code_files.get('python', [])
     
     def get_file_content(self, repo, file_path: str) -> str:
-        """
-        Fetch the content of a specific file.
-        
-        Args:
-            repo: Repository object
-            file_path: Path to file in repository
-            
-        Returns:
-            File content as string
-        """
         try:
             file_content = repo.get_contents(file_path)
             content = file_content.decoded_content.decode('utf-8')
@@ -177,21 +128,10 @@ class GitHubConnector:
             return ""
     
     def close(self):
-        """Close the GitHub connection."""
         self.github.close()
         print("✓ Connection closed")
 
     def list_my_repositories(self, limit: int = 10, interactive: bool = True):
-        """
-        List your repositories with pagination.
-        
-        Args:
-            limit: Number of repositories to show per page
-            interactive: If True, allows user to request more repos
-            
-        Returns:
-            List of repository objects
-        """
         repos = list(self.user.get_repos())
         total_repos = len(repos)
         
@@ -201,7 +141,6 @@ class GitHubConnector:
         offset = 0
         
         while offset < total_repos:
-            # Show current batch
             end = min(offset + limit, total_repos)
             print(f"Showing {offset + 1}-{end} of {total_repos}:\n")
             
@@ -211,7 +150,6 @@ class GitHubConnector:
             
             offset = end
             
-            # Ask if user wants more
             if interactive and offset < total_repos:
                 print(f"\n📄 Showing {end}/{total_repos} repositories")
                 response = input("Show more? (yes/no/number): ").strip().lower()
@@ -222,19 +160,13 @@ class GitHubConnector:
                     limit = int(response)
                 elif response not in ['yes', 'y', '']:
                     break
-                print()  # Blank line for readability
+                print()
             else:
                 break
         
         return repos
 
     def select_repository_interactive(self):
-        """
-        Interactively select a repository from your list.
-        
-        Returns:
-            Selected repository object or None
-        """
         repos = self.list_my_repositories(limit=10, interactive=True)
         
         if not repos:
@@ -251,7 +183,6 @@ class GitHubConnector:
             if selection.lower() == 'manual':
                 manual_repo = input("Enter repository (format: owner/repo): ").strip()
                 return self.get_repository(manual_repo)
-            
             elif selection.isdigit():
                 idx = int(selection) - 1
                 if 0 <= idx < len(repos):
@@ -260,22 +191,16 @@ class GitHubConnector:
                     return selected_repo
                 else:
                     print(f"❌ Invalid number. Please enter 1-{len(repos)}")
-            
             elif selection.lower() in ['exit', 'quit', 'cancel']:
                 print("❌ Cancelled")
                 return None
-            
             else:
                 print("❌ Invalid input. Enter a number, 'manual', or 'exit'")
 
 
 def can_create_issue(repo, connector) -> bool:
-    """Return True if the current user can reasonably create issues on this repo."""
-    # Fast path: you own the repo
     if repo.owner.login == connector.user.login:
         return True
-
-    # If permissions object is available, check write/admin
     try:
         perms = getattr(repo, "permissions", None)
         if perms:
@@ -283,24 +208,17 @@ def can_create_issue(repo, connector) -> bool:
                 return True
     except Exception:
         pass
-
-    # Otherwise assume no permission
     return False
 
 
 def create_ethics_issue(repo, report):
-    """
-    Automatically create GitHub issue for low ethical score.
-    """
     critical_issues = [i for i in report['issues'] if i.severity == 'critical']
     
     if report['ethical_score'] >= 50:
         print("✅ Ethical score is >= 50 - skipping issue creation")
         return
     
-    # Issue title and body
     issue_title = f"🚨 Ethics Scan: {report['total_issues']} Issues Found (Score: {report['ethical_score']}/100)"
-    
     critical_summary = "\n".join([f"• {i.file_path}:{i.line_number} - {i.message}" for i in critical_issues[:10]])
     
     issue_body = f"""
@@ -323,14 +241,13 @@ By Type: {report['issues_by_type']}
 [Download JSON report](https://github.com/{repo.full_name}/actions) (check artifacts)
 
 ### ✅ Next Steps
-1. **Fix CRITICAL privacy issues** (hardcoded credentials)
-2. Review `{len([i for i in report['issues'] if i.issue_type == 'gender'])}` gender bias instances  
-3. Rerun analyzer after fixes
-4. Close this issue when score > 80/100
+1. Fix CRITICAL privacy/security issues.
+2. Address fairness, transparency, and other gaps noted in the report.
+3. Rerun analyzer after fixes.
+4. Close this issue when score > 80/100.
 
 **Local testing**: `python github_connector.py`
     """
-
     try:
         new_issue = repo.create_issue(
             title=issue_title,
@@ -346,7 +263,6 @@ By Type: {report['issues_by_type']}
 
 
 def display_issues_paginated(issues: List, page_size: int = 10):
-    """Display issues with pagination."""
     total = len(issues)
     offset = 0
     
@@ -376,13 +292,18 @@ def display_issues_paginated(issues: List, page_size: int = 10):
 
 
 def run_ethics_analysis(connector, repo):
-    """Run complete ethics analysis on a repository."""
-    
     if not repo:
         print("❌ No repository selected")
         return
     
-    # Choose which languages to scan
+    # Select ethics focus profile
+    print("\nSelect ethics focus:")
+    print("1. Responsibility & management (P1–P3)")
+    print("2. Data safety and security (P4–P8)")
+    print("3. Understanding, accessibility, and societal impact (P9–P11)")
+    focus_choice = input("Choice (1-3, default=2): ").strip() or "2"
+    focus_pillars = FOCUS_PROFILES.get(focus_choice, FOCUS_PROFILES["2"])
+    
     print("\n" + "="*60)
     print("LANGUAGE SELECTION")
     print("="*60)
@@ -399,42 +320,40 @@ def run_ethics_analysis(connector, repo):
     elif choice == '2':
         languages = ['javascript']
     elif choice == '3':
-        languages = None  # Scan all
+        languages = None
     elif choice == '4':
         print("\nAvailable: python, javascript, java, cpp, csharp, go, rust, php, ruby, swift, kotlin, scala")
         custom = input("Enter languages (comma-separated): ").strip()
         languages = [lang.strip() for lang in custom.split(',')]
     else:
-        languages = ['python']  # Default
+        languages = ['python']
     
     print(f"\n🔍 Running ethics analysis on {repo.full_name}...")
     
-    # Scan for code files
     code_files = connector.list_code_files(repo, languages=languages)
-    
     if not code_files:
         print("❌ No code files found for selected languages")
         return
     
-    # Flatten all files into single list
     all_files = []
     for lang, files in code_files.items():
         all_files.extend(files)
     
     print(f"\n📊 Analyzing {len(all_files)} files...")
     
-    # Initialize analyzer
-    analyzer = EthicsAnalyzer()
+    analyzer = EthicsAnalyzer(
+        use_llm=True,
+        groq_api_key=os.getenv("GROQ_API_KEY"),
+        focus_pillars=focus_pillars,
+    )
     
-    # Analyze files with progress
     for i, file_path in enumerate(all_files, 1):
         print(f"  [{i}/{len(all_files)}] Analyzing {file_path}...")
         content = connector.get_file_content(repo, file_path)
         if content:
             analyzer.analyze_file(file_path, content)
     
-    # Generate report
-    report = analyzer.generate_report()
+    report = analyzer.generate_report(repo.full_name)
     
     print(f"\n{'='*60}")
     print(f"📈 ETHICS ANALYSIS REPORT")
@@ -444,7 +363,6 @@ def run_ethics_analysis(connector, repo):
     print(f"Total issues: {report['total_issues']}")
     print(f"Ethical score: {report['ethical_score']}/100")
     
-    # Severity assessment
     severity_counts = report['issues_by_severity']
     critical = severity_counts.get('critical', 0)
     if critical > 0:
@@ -458,12 +376,33 @@ def run_ethics_analysis(connector, repo):
     
     print(f"\nIssues by severity: {report['issues_by_severity']}")
     print(f"Issues by type: {report['issues_by_type']}")
+
+    # LLM pillar view with reasons and code excerpts
+    if report.get("llm_result"):
+        print("\n🤖 LLM‑based pillar assessment:")
+        pillars = report["llm_result"].get("pillars", {})
+        focus_pillars = report.get("focus_pillars", list(pillars.keys()))
+        for pid in sorted(pillars.keys()):
+            if pid not in focus_pillars:
+                continue
+            p = pillars[pid]
+            print(f"\n  {pid} ({EthicsAnalyzer.PILLARS[pid]}): score={p.get('score')}")
+            print(f"     reason: {p.get('reason')}")
+        gen = report["llm_result"].get("gen")
+        if gen:
+            print("\n🎨 GEN overlay assessment:")
+            print(f"  uses_generative_ai: {gen.get('uses_generative_ai')}")
+            print(f"  score: {gen.get('score')}")
+            print(f"  reason: {gen.get('reason')}")
+        overall_comment = report["llm_result"].get("overall_comment")
+        if overall_comment:
+            print(f"\nLLM overall comment: {overall_comment}")
+    else:
+        print("\nℹ️ LLM result not available (check GROQ_API_KEY or llm_client).")
     
-    # Display issues with pagination
     if report['issues']:
         display_issues_paginated(report['issues'], page_size=10)
     
-    # Ask about creating GitHub issue when ethical score is low
     if report['ethical_score'] < 50:
         if not can_create_issue(repo, connector):
             print("\nℹ️ Ethical score is below 50, "
@@ -478,11 +417,9 @@ def run_ethics_analysis(connector, repo):
     else:
         print("\n📝 Ethical score is 50 or above – skipping automatic issue creation.")
     
-    # Save report to JSON
     save_report = input("\n💾 Save report to JSON file? (yes/no): ").strip().lower()
     if save_report in ['yes', 'y']:
         filename = f"ethics_report_{repo.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
         report_json = {
             'repository': repo.full_name,
             'scan_date': datetime.now().isoformat(),
@@ -498,33 +435,119 @@ def run_ethics_analysis(connector, repo):
                     'severity': i.severity,
                     'message': i.message,
                     'suggestion': i.suggestion,
-                    'code_snippet': i.code_snippet
+                    'code_snippet': i.code_snippet,
                 } for i in report['issues']
-            ]
+            ],
+            'llm_result': report.get('llm_result'),
+            'focus_pillars': report.get('focus_pillars'),
         }
-        
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(report_json, f, indent=2)
-        
         print(f"✅ Report saved to: {filename}")
 
 
+def analyze_local_code(snippets: Dict[str, str]):
+    """
+    Run ethics analysis on ad‑hoc code snippets instead of a GitHub repo.
+    """
+    print("\n" + "="*60)
+    print("LOCAL CODE ETHICS ANALYSIS")
+    print("="*60)
+
+    print("\nSelect ethics focus:")
+    print("1. Responsibility & management (P1–P3)")
+    print("2. Data safety and security (P4–P8)")
+    print("3. Understanding, accessibility, and societal impact (P9–P11)")
+    focus_choice = input("Choice (1-3, default=2): ").strip() or "2"
+    focus_pillars = FOCUS_PROFILES.get(focus_choice, FOCUS_PROFILES["2"])
+
+    analyzer = EthicsAnalyzer(
+        use_llm=True,
+        groq_api_key=os.getenv("GROQ_API_KEY"),
+        focus_pillars=focus_pillars,
+    )
+
+    all_files = list(snippets.items())
+    print(f"\n📊 Analyzing {len(all_files)} local files...")
+
+    for i, (file_path, content) in enumerate(all_files, 1):
+        print(f"  [{i}/{len(all_files)}] Analyzing {file_path}...")
+        analyzer.analyze_file(file_path, content)
+
+    report = analyzer.generate_report("local/snippet-analysis")
+
+    print(f"\n{'='*60}")
+    print("📈 ETHICS ANALYSIS REPORT (LOCAL)")
+    print(f"{'='*60}")
+    print(f"Files scanned: {len(all_files)}")
+    print(f"Total issues: {report['total_issues']}")
+    print(f"Ethical score: {report['ethical_score']}/100")
+    print(f"Issues by severity: {report['issues_by_severity']}")
+    print(f"Issues by type: {report['issues_by_type']}")
+
+    if report.get("llm_result"):
+        print("\n🤖 LLM‑based pillar assessment:")
+        pillars = report["llm_result"].get("pillars", {})
+        focus_pillars = report.get("focus_pillars", list(pillars.keys()))
+        for pid in sorted(pillars.keys()):
+            if pid not in focus_pillars:
+                continue
+            p = pillars[pid]
+            print(f"\n  {pid} ({EthicsAnalyzer.PILLARS[pid]}): score={p.get('score')}")
+            print(f"     reason: {p.get('reason')}")
+        gen = report["llm_result"].get("gen")
+        if gen:
+            print("\n🎨 GEN overlay assessment:")
+            print(f"  uses_generative_ai: {gen.get('uses_generative_ai')}")
+            print(f"  score: {gen.get('score')}")
+            print(f"  reason: {gen.get('reason')}")
+        overall_comment = report["llm_result"].get("overall_comment")
+        if overall_comment:
+            print(f"\nLLM overall comment: {overall_comment}")
+
+    if report['issues']:
+        display_issues_paginated(report['issues'], page_size=10)
+
+    return report
+
+
 if __name__ == "__main__":
-    connector = GitHubConnector()
-    
-    print("\n" + "="*60)
-    print("🛡️ ETHICS CODE ANALYZER")
-    print("="*60)
-    
-    # Interactive repository selection
-    repo = connector.select_repository_interactive()
-    
-    if repo:
-        # Run ethics analysis
-        run_ethics_analysis(connector, repo)
-    
-    connector.close()
-    
-    print("\n" + "="*60)
-    print("✅ Analysis complete! Thank you for using Ethics Code Analyzer.")
-    print("="*60)
+    mode = input(
+        "\nSelect mode:\n"
+        "1. Analyze GitHub repository\n"
+        "2. Analyze pasted/local code\n"
+        "Choice (1-2, default=1): "
+    ).strip() or "1"
+
+    if mode == "2":
+        print("\nEnter code snippets to analyze. Type a single line with 'EOF' to finish each file.")
+        snippets: Dict[str, str] = {}
+        while True:
+            file_name = input("\nPseudo file name (or just Enter to stop): ").strip()
+            if not file_name:
+                break
+            print(f"Paste code for {file_name}, then type 'EOF' on a new line:")
+            lines = []
+            while True:
+                line = input()
+                if line.strip() == "EOF":
+                    break
+                lines.append(line)
+            snippets[file_name] = "\n".join(lines)
+
+        if snippets:
+            analyze_local_code(snippets)
+        else:
+            print("❌ No code provided; exiting.")
+    else:
+        connector = GitHubConnector()
+        print("\n" + "="*60)
+        print("🛡️ ETHICS CODE ANALYZER")
+        print("="*60)
+        repo = connector.select_repository_interactive()
+        if repo:
+            run_ethics_analysis(connector, repo)
+        connector.close()
+        print("\n" + "="*60)
+        print("✅ Analysis complete! Thank you for using Ethics Code Analyzer.")
+        print("="*60)
