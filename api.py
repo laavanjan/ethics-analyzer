@@ -1,98 +1,152 @@
 # api.py
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, List, Optional
+from datetime import datetime
 import os
+import json
 
-from github_connector import GitHubConnector, run_ethics_analysis, analyze_local_code
-from ethics_analyzer import EthicsAnalyzer, FOCUS_PROFILES  # export FOCUS_PROFILES from that file
+from dotenv import load_dotenv
+load_dotenv()
+
+from github_connector import GitHubConnector, create_ethics_issue
+from ethics_analyzer import EthicsAnalyzer, FOCUS_PROFILES
 from llm_client import EthicsLLMClient
 
-app = FastAPI()
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+app = FastAPI(
+    title="Ethics Code Analyzer API",
+    description="API for analyzing code repositories or snippets for ethical compliance",
+    version="0.1.0"
+)
 
 
-class GitHubRequest(BaseModel):
-    mode: str = "github"
-    repo_full_name: str
+class AnalyzeRequest(BaseModel):
+    mode: str = "github"                     # "github" or "local"
+    github_token: Optional[str] = None       # required only for github mode
+    repo_full_name: Optional[str] = None     # required for github
+    snippets: Optional[Dict[str, str]] = None  # required for local
     focus_profile: str = "2"
     languages: Optional[List[str]] = None
-
-
-class LocalRequest(BaseModel):
-    mode: str = "local"
-    snippets: Dict[str, str]
-    focus_profile: str = "2"
-
-
-def check_auth(auth_header: Optional[str]):
-    if not INTERNAL_API_KEY:
-        return
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = auth_header.split(" ", 1)[1].strip()
-    if token != INTERNAL_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    create_github_issue: bool = False
+    save_json_report: bool = False
 
 
 @app.post("/api/ethics/analyze")
-async def analyze(
-    body: Dict,
-    authorization: Optional[str] = Header(None),
-):
-    check_auth(authorization)
-
-    mode = body.get("mode", "github")
-
-    focus_profile = body.get("focus_profile", "2")
+async def analyze(body: AnalyzeRequest):
+    """
+    Analyze GitHub repo or local code snippets.
+    
+    - github mode: requires github_token and repo_full_name
+    - local mode: requires snippets
+    - Optional: create_github_issue, save_json_report
+    """
+    mode = body.mode
+    focus_profile = body.focus_profile
     focus_pillars = FOCUS_PROFILES.get(focus_profile, FOCUS_PROFILES["2"])
 
+    # Prepare base response early
+    response = {
+        "success": True,
+        "status": "completed",
+        "mode": mode,
+        "repo_full_name": None,
+        "focus_profile": focus_profile,
+        "focus_pillars": focus_pillars,
+        "files_scanned": 0,
+        "scan_timestamp": datetime.utcnow().isoformat() + "Z",
+        "issue_created": False,
+        "json_saved": False,
+        "saved_file": None,
+        "issue_error": None,
+        "issue_skipped_reason": None
+    }
+
+    connector = None
+    repo = None
+    report = None
+
     if mode == "github":
-        repo_full_name = body.get("repo_full_name")
-        if not repo_full_name:
-            raise HTTPException(status_code=400, detail="repo_full_name is required for github mode")
+        if not body.github_token:
+            raise HTTPException(400, "github_token is required for github mode")
+        if not body.repo_full_name:
+            raise HTTPException(400, "repo_full_name is required for github mode")
 
-        languages = body.get("languages")
-        connector = GitHubConnector()
-        repo = connector.get_repository(repo_full_name)
+        connector = GitHubConnector(access_token=body.github_token)
+
+        repo = connector.get_repository(body.repo_full_name)
         if not repo:
-            raise HTTPException(status_code=404, detail="Repository not found")
+            raise HTTPException(404, "Repository not found or token has insufficient permissions")
 
-        code_files = connector.list_code_files(repo, languages=languages)
+        code_files = connector.list_code_files(repo, languages=body.languages)
         all_files = [fp for files in code_files.values() for fp in files]
 
         analyzer = EthicsAnalyzer(
             use_llm=True,
-            groq_api_key=os.getenv("GROQ_API_KEY"),
             focus_pillars=focus_pillars,
         )
+
         for file_path in all_files:
             content = connector.get_file_content(repo, file_path)
             if content:
                 analyzer.analyze_file(file_path, content)
 
-        report = analyzer.generate_report(repo_full_name)
-        connector.close()
-        report["mode"] = "github"
-        report["repo_full_name"] = repo_full_name
-        return report
+        report = analyzer.generate_report(body.repo_full_name)
+
+        response["repo_full_name"] = body.repo_full_name
+        response["files_scanned"] = len(all_files)
 
     elif mode == "local":
-        snippets = body.get("snippets")
-        if not snippets:
-            raise HTTPException(status_code=400, detail="snippets is required for local mode")
+        if not body.snippets or not isinstance(body.snippets, dict):
+            raise HTTPException(400, "snippets must be a non-empty dict for local mode")
 
         analyzer = EthicsAnalyzer(
             use_llm=True,
-            groq_api_key=os.getenv("GROQ_API_KEY"),
             focus_pillars=focus_pillars,
         )
-        for file_path, content in snippets.items():
-            analyzer.analyze_file(file_path, content)
+
+        for file_path, content in body.snippets.items():
+            if content:
+                analyzer.analyze_file(file_path, content)
 
         report = analyzer.generate_report("local/snippet-analysis")
-        report["mode"] = "local"
-        return report
+
+        response["files_scanned"] = len(body.snippets)
 
     else:
         raise HTTPException(status_code=400, detail="mode must be 'github' or 'local'")
+
+    # Update response with analysis results
+    response.update(report)
+
+    # GitHub issue creation (only github mode)
+    if mode == "github" and body.create_github_issue:
+        if report["ethical_score"] < 50:
+            try:
+                create_ethics_issue(repo, report)
+                response["issue_created"] = True
+            except Exception as e:
+                response["issue_created"] = False
+                response["issue_error"] = str(e)
+        else:
+            response["issue_created"] = False
+            response["issue_skipped_reason"] = "Score >= 50 – no critical issues"
+
+    # JSON saving (both modes)
+    if body.save_json_report:
+        repo_name_safe = body.repo_full_name.replace("/", "_") if mode == "github" else "local"
+        filename = f"ethics_report_{repo_name_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        save_path = f"./reports/{filename}"
+        os.makedirs("./reports", exist_ok=True)
+
+        # Save the full report
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, default=str)  # default=str for dataclasses
+
+        response["json_saved"] = True
+        response["saved_file"] = save_path
+
+    # Cleanup
+    if connector:
+        connector.close()
+
+    return response

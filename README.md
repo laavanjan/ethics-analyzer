@@ -1,361 +1,161 @@
 
 # Ethics Code Analyzer API
 
-This API exposes the **Ethics Code Analyzer** so anyone on the team can scan a GitHub repository or local code snippets for ethical risks and governance coverage.
+A FastAPI-powered API that scans GitHub repositories or local code snippets for ethical compliance (privacy, fairness, transparency, safety, security, etc.) using rule-based checks + Claude (Anthropic LLM).
 
-It combines:
+Focus profiles:
+- **1** — Responsibility & management (P1–P3)
+- **2** — Data safety & security (P4–P8) ← **default**
+- **3** — Understanding, accessibility, societal impact (P9–P11)
 
-- Heuristic checks (e.g., hard‑coded secrets, logging).
-- Pillar-based LLM assessment using Groq (`llama-3.3-70b-versatile`).
-- Primary pillars **P1–P11** plus **GEN/REL overlays**.
+## Features
 
----
+- Analyze GitHub repos or pasted code
+- Optional: auto-create GitHub issue if score < 50
+- Optional: save full report as JSON file on server
+- Powered by Claude for deep qualitative reasoning
 
-## 1. Architecture
+## Quick Start
 
-Core files:
-
-- `ethics_analyzer.py`  
-  Implements `EthicsAnalyzer` (controls, overlays, scoring, report).
-- `github_connector.py`  
-  GitHub integration; in the API, its logic is reused for repo scanning.
-- `llm_client.py`  
-  `EthicsLLMClient` wrapper around Groq chat completions (JSON output).
-
-API layer (e.g., `api.py`) wraps these components and exposes an HTTP endpoint.
-
----
-
-## 2. Authentication
-
-The API requires a simple Bearer token.
-
-### Server configuration
-
-Set a shared token on the server:
+### 1. Install dependencies
 
 ```bash
-export INTERNAL_API_KEY="some-long-random-token"
+pip install -r requirements.txt
+# or
+uv pip install fastapi uvicorn python-dotenv anthropic PyGithub
 ```
 
-In your API code, validate:
+### 2. Create `.env` file (in project root)
 
-```python
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
+```env
+# Required — your Claude API key
+ANTHROPIC_API_KEY=sk-ant-api03-................................
 
-def check_auth(auth_header: str | None):
-    if not INTERNAL_API_KEY:
-        return  # auth disabled if not set
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = auth_header.split(" ", 1).strip()
-    if token != INTERNAL_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid token")
+# Optional — only needed if scanning private repos or creating issues
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### Client headers
+### 3. Start the server
 
-```http
-Authorization: Bearer YOUR_INTERNAL_API_KEY
-Content-Type: application/json
+```bash
+uvicorn api:app --reload --port 8000
 ```
 
-Note: Groq and GitHub have their own API keys via env:
+Open interactive docs:  
+→ http://127.0.0.1:8000/docs
 
-- `GROQ_API_KEY`
-- `GITHUB_TOKEN`
+## How to Get a GitHub Personal Access Token (Classic)
 
----
+You need this token to scan repositories (especially private ones) or create issues.
 
-## 3. Endpoint
+1. Go to: https://github.com/settings/tokens
+2. Click **Generate new token** → **Generate new token (classic)**
+3. Give it a name (e.g. "Ethics Analyzer 2026")
+4. Set expiration (e.g. 30 days or No expiration — your choice)
+5. Select scopes:
+   - `repo` (full control of private repositories — includes read code + create issues)
+   - Optional: `read:org` if scanning org repos
+6. Click **Generate token**
+7. **Copy the token** (starts with `ghp_`) — you won't see it again!
+8. Paste it into your `.env` file (or send it in API requests)
 
-- **Base URL** (example): `https://your-domain.com/api`
-- **Path**: `/ethics/analyze`
-- **Method**: `POST`
-- **Content‑Type**: `application/json`
+**Security warning**: Never commit the token to Git or share it publicly.
 
-One endpoint supports two modes:
+## API Endpoint
 
-- `mode = "github"` – scan a GitHub repository.
-- `mode = "local"` – scan ad‑hoc code snippets.
+**POST** `/api/ethics/analyze`
 
----
+**Base URL**: `http://127.0.0.1:8000` (local)
 
-## 4. Request body
+### Request Body Schema
 
-### Common field
+```json
+{
+  "mode":              "github" | "local" (required)
+  "github_token":      string (required for github mode)
+  "repo_full_name":    string (required for github mode, e.g. "owner/repo")
+  "snippets":          object (required for local mode, { "file.py": "code..." })
+  "focus_profile":     "1" | "2" | "3" (default: "2")
+  "languages":         ["python", "javascript", ...] (optional, github mode only)
+  "create_github_issue": boolean (optional, default: false)
+  "save_json_report":    boolean (optional, default: false)
+}
+```
 
-- `mode` (string, required): `"github"` or `"local"`.
+### Examples
 
-### 4.1 GitHub repo analysis
+#### Scan GitHub repo + create issue + save JSON
 
 ```json
 {
   "mode": "github",
-  "repo_full_name": "owner/repo",
+  "github_token": "ghp_your_token_here",
+  "repo_full_name": "laavanjan/ethics-analyzer",
   "focus_profile": "2",
-  "languages": ["python", "javascript"]
+  "create_github_issue": true,
+  "save_json_report": true
 }
 ```
 
-#### Fields
-
-- `repo_full_name` (string, required when `mode == "github"`):  
-  GitHub repo in `owner/repo` format. Example:
-
-  ```json
-  "repo_full_name": "laavanjan/Youtube_comment_analysis_end_to_end"
-  ```
-
-- `focus_profile` (string, optional, default `"2"`): selects which pillars to emphasize.
-
-  ```python
-  FOCUS_PROFILES = {
-    "1": ["P1", "P2", "P3"],          # Responsibility & management
-    "2": ["P4", "P5", "P6", "P7", "P8"],  # Data safety & security
-    "3": ["P9", "P10", "P11"],        # Understanding, accessibility, impact
-  }
-  ```
-
-  - `"1"` → P1–P3 (Responsibility & management)  
-  - `"2"` → P4–P8 (Data safety & security)  
-  - `"3"` → P9–P11 (Understanding, accessibility, impact)
-
-- `languages` (array of strings, optional):
-
-  - If omitted or `null`: scan all supported languages
-    (`python`, `javascript`, `java`, `cpp`, `csharp`, `go`, `rust`, `php`, `ruby`, `swift`, `kotlin`, `scala`).
-  - If present: restrict to those languages:
-
-    ```json
-    "languages": ["python"]
-    ```
-
-### 4.2 Local snippets analysis
+#### Local snippets (no token needed)
 
 ```json
 {
   "mode": "local",
   "snippets": {
-    "app.py": "import logging\napi_key = 'secret'\nlogging.info('hello')",
-    "utils/security.py": "def sanitize(x):\n    return x.strip()"
+    "test.py": "API_KEY = \"gsk_123456789secret\"",
+    "app.py": "def process(text): return text.upper()"
   },
-  "focus_profile": "1"
+  "focus_profile": "2",
+  "save_json_report": true
 }
 ```
 
-#### Fields
+### Where Saved Files Go
 
-- `snippets` (object, required when `mode == "local"`):  
-  Mapping `pseudo_file_path -> code string`.
+- JSON reports are saved in the `./reports/` folder (relative to where you run `uvicorn`)
+- Example: `./reports/ethics_report_laavanjan_ethics-analyzer_20260303_071317.json`
+- Folder is auto-created if missing
 
-- `focus_profile` (string, optional, default `"2"`): same mapping as above.
-
----
-
-## 5. Response schema
-
-On success (`200 OK`) the API returns the same structure as:
-
-```python
-EthicsAnalyzer.generate_report(...)
-```
-
-plus:
-
-- `"mode"` – `"github"` or `"local"`.
-- `"repo_full_name"` – for GitHub mode.
-
-### Example
+### Response Body Example
 
 ```json
 {
+  "success": true,
+  "status": "completed",
   "mode": "github",
-  "repo_full_name": "owner/repo",
-  "ethical_score": 72.5,
-  "total_issues": 3,
-  "issues_by_severity": {
-    "critical": 1,
-    "medium": 2
-  },
-  "issues_by_type": {
-    "security": 1,
-    "privacy": 1,
-    "fairness": 1
-  },
-  "issues": [
-    {
-      "file_path": "src/app.py",
-      "line_number": 1,
-      "issue_type": "security",
-      "severity": "critical",
-      "message": "Possible hard‑coded secret detected.",
-      "suggestion": "Move secrets to env vars or secret manager; rotate exposed keys.",
-      "code_snippet": "...api_key = '***'..."
-    }
-  ],
-  "controls": {
-    "SEC-03": {
-      "control_id": "SEC-03",
-      "pillar": "P8",
-      "name": "Secure SDLC / secrets",
-      "satisfied": false,
-      "evidence_files": ["src/app.py"],
-      "notes": "Hard‑coded secrets found."
-    }
-  },
-  "overlays": {
-    "GEN": {
-      "GEN-01": "conditional",
-      "GEN-02": "not_applicable"
-    },
-    "REL": {
-      "REL-01": "unmet"
-    }
-  },
+  "repo_full_name": "laavanjan/ethics-analyzer",
+  "focus_profile": "2",
+  "focus_pillars": ["P4", "P5", "P6", "P7", "P8"],
+  "files_scanned": 3,
+  "scan_timestamp": "2026-03-03T07:13:17.337754Z",
+  "ethical_score": 25,
+  "total_issues": 0,
+  "issue_created": true,
+  "json_saved": true,
+  "saved_file": "./reports/ethics_report_laavanjan_ethics-analyzer_20260303_XXXXXX.json",
   "llm_result": {
-    "pillars": {
-      "P4": {
-        "score": 1,
-        "reason": "In src/app.py: `api_key = 'secret'` shows privacy/security risk; limited evidence of proper controls."
-      },
-      "P5": {
-        "score": 0,
-        "reason": "No fairness or bias‑related logic visible in the provided snippets."
-      }
-    },
-    "gen": {
-      "uses_generative_ai": false,
-      "score": 0,
-      "reason": "No LLM or image generation calls found."
-    },
-    "overall_comment": "Good logging, but secrets in code and missing privacy controls."
-  },
-  "focus_pillars": ["P4", "P5", "P6", "P7", "P8"]
+    "pillars": { ... },
+    "gen": { ... },
+    "overall_comment": "..."
+  }
 }
 ```
 
-Notes for readers:
+## Security & Best Practices
 
-- `ethical_score` is a blended heuristic + LLM score (0–100).
-- `issues` are the heuristic issues detected (e.g., secrets in code).
-- `controls` reflect which governance controls are satisfied or unmet.
-- `overlays.GEN`/`REL` come from anchor controls.
-- `llm_result.pillars` only contains pillars in the selected `focus_profile`.
-- Each `reason` includes code or file references to explain why the score is 0/1/2.
+- **Never commit tokens** to git — use `.env` or environment variables
+- Use minimal scopes on GitHub tokens
+- For production: switch to GitHub OAuth (no raw token sharing)
+- Rate limits: GitHub API ~5000 requests/hour with token
+- Private repos: token needs `repo` scope
 
----
+## Troubleshooting
 
-## 6. Error responses
+- No file saved? → Make sure `"save_json_report": true` is in the body
+- Issue not created? → Check token has `repo` scope, score < 50, and you have write access
+- 404 repo not found? → Wrong repo name or insufficient token permissions
 
-### 400 Bad Request
+For bugs or suggestions — open an issue!
 
-Missing or invalid fields.
-
-```json
-{
-  "error": "invalid_request",
-  "message": "repo_full_name is required when mode == 'github'"
-}
-```
-
-Other examples:
-
-- `mode` not in `["github", "local"]`
-- missing `snippets` when `mode == "local"`.
-
-### 401 Unauthorized
-
-Missing or invalid `Authorization` header.
-
-```json
-{
-  "error": "unauthorized",
-  "message": "Missing or invalid API token"
-}
-```
-
-### 500 Internal Server Error
-
-Unexpected internal error (GitHub / Groq / parsing failures).
-
-```json
-{
-  "error": "server_error",
-  "message": "Unexpected error while running ethics analysis"
-}
-```
-
----
-
-## 7. Example calls
-
-### 7.1 GitHub repo (cURL)
-
-```bash
-curl -X POST https://your-domain.com/api/ethics/analyze \
-  -H "Authorization: Bearer YOUR_INTERNAL_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mode": "github",
-    "repo_full_name": "laavanjan/Youtube_comment_analysis_end_to_end",
-    "focus_profile": "2",
-    "languages": ["python"]
-  }'
-```
-
-### 7.2 Local snippets (cURL)
-
-```bash
-curl -X POST https://your-domain.com/api/ethics/analyze \
-  -H "Authorization: Bearer YOUR_INTERNAL_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mode": "local",
-    "focus_profile": "1",
-    "snippets": {
-      "app.py": "import logging\napi_key = \"secret\"\nlogging.info(\"hello\")",
-      "utils/security.py": "def sanitize(x):\n    return x.strip()"
-    }
-  }'
-```
-
----
-
-## 8. Running locally (dev)
-
-1. Clone the repo and set up a virtual environment.
-2. Install dependencies:
-
-   ```bash
-   pip install fastapi uvicorn groq PyGithub python-dotenv
-   ```
-
-3. Set environment variables:
-
-   ```bash
-   export GROQ_API_KEY="your-groq-key"
-   export GITHUB_TOKEN="your-github-token"
-   export INTERNAL_API_KEY="your-internal-api-token"
-   ```
-
-4. Start the API (example with FastAPI):
-
-   ```bash
-   uvicorn api:app --reload
-   ```
-
-5. Call the endpoint from cURL/Postman as shown above.
-
----
-
-## 9. Extending the API
-
-Possible extensions:
-
-- Add a `GET /ethics/models` to list available Groq models.
-- Add a `GET /health` to check Groq/GitHub/env status.
-- Add a query parameter or field to toggle LLM usage (`use_llm: true/false`) for faster, heuristic-only scans.
-
-Contributors should preserve the current JSON contract so existing clients continue to work.
-```
+Happy ethical coding! 🛡️

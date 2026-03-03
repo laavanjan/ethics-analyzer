@@ -1,47 +1,42 @@
-from groq import Groq  # pip install groq
+# llm_client.py
+
 import os
 import json
+from typing import List, Dict, Optional
+from dotenv import load_dotenv
+from anthropic import Anthropic, APIError, RateLimitError, APIConnectionError
 
+load_dotenv()  # make sure .env is loaded here
 
 class EthicsLLMClient:
     """
-    Thin wrapper around Groq chat completion API to evaluate selected P1–P11 controls
-    plus the GEN overlay. Scores 0–2 and returns reasons that include code excerpts.
+    Wrapper for Anthropic Claude API.
+    Evaluates selected P1–P11 controls + GEN overlay.
     """
 
-    def __init__(self, api_key: str | None = None, model: str = "llama-3.3-70b-versatile"):
-        api_key = api_key or os.getenv("GROQ_API_KEY")
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = None,
+    ):
+        api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("GROQ_API_KEY is required")
-        self.client = Groq(api_key=api_key)
-        self.model = model
+            raise ValueError("ANTHROPIC_API_KEY is required. Check .env file.")
+
+        self.client = Anthropic()
+
+        # Use a valid model name from your screenshot
+        self.model = model or "claude-haiku-4-5"   # ← recommended default
+
+
+        print(f"Claude client initialized with model: {self.model}")
 
     def evaluate_repo(
         self,
         repo_name: str,
         files_summary: str,
-        focus_pillars: list[str],
-    ) -> dict:
-        """
-        Call LLM once per repo.
-
-        Args:
-            repo_name: "owner/repo" or any identifier.
-            files_summary: concatenated snippets of key files.
-            focus_pillars: list of pillar IDs to score, e.g. ["P1","P2","P3"].
-
-        Returns:
-            dict with:
-            {
-              "pillars": { "P1": {"score": int, "reason": str}, ... },
-              "gen": {
-                  "uses_generative_ai": bool,
-                  "score": int,
-                  "reason": str
-              },
-              "overall_comment": str
-            }
-        """
+        focus_pillars: List[str],
+    ) -> Dict:
         focus_str = ", ".join(focus_pillars)
 
         system_prompt = (
@@ -55,44 +50,55 @@ class EthicsLLMClient:
             f"Only evaluate these pillars: {focus_str}.\n\n"
             "You must output STRICT JSON with this schema:\n"
             "{\n"
-            "  'pillars': {\n"
-            "    'P1': {'score': int, 'reason': str},\n"
+            "  \"pillars\": {\n"
+            "    \"P1\": {\"score\": int, \"reason\": str},\n"
             "    ... only for the pillars you were asked to evaluate ...\n"
             "  },\n"
-            "  'gen': {\n"
-            "    'uses_generative_ai': bool,\n"
-            "    'score': int,\n"
-            "    'reason': str\n"
+            "  \"gen\": {\n"
+            "    \"uses_generative_ai\": bool,\n"
+            "    \"score\": int,\n"
+            "    \"reason\": str\n"
             "  },\n"
-            "  'overall_comment': str\n"
+            "  \"overall_comment\": str\n"
             "}\n\n"
-            "Scoring for each pillar: 0 = no evidence / serious gaps; "
-            "1 = partial evidence; 2 = strong evidence.\n"
-            "If the repo does not use generative AI at all, set uses_generative_ai=false and score=0.\n\n"
-            "IMPORTANT:\n"
-            "- For every pillar you include, the 'reason' MUST reference at least one concrete code "
-            "  excerpt or file path from the provided snippets whenever the score is 1 or 2.\n"
-            "- Quote small parts of the code directly in the reason, e.g. \"in app.py: logging.request(...)\".\n"
-            "- Keep reasons short (1–3 sentences per pillar).\n"
-            "- Do NOT add any fields outside the schema.\n"
+            "Scoring: 0 = no evidence / serious gaps; 1 = partial; 2 = strong.\n"
+            "If no generative AI usage detected, set uses_generative_ai=false and score=0.\n"
+            "In 'reason' fields: always reference at least one concrete file path or code excerpt "
+            "when score is 1 or 2. Quote small parts of code directly.\n"
+            "Keep reasons concise (1–3 sentences).\n"
+            "Output ONLY the JSON object – no other text, no markdown."
         )
 
-        user_prompt = (
+        user_message = (
             f"Repository: {repo_name}\n\n"
             "Relevant code/docs snippets:\n"
             f"{files_summary}\n\n"
-            "Now produce ONLY the JSON object described above."
+            "Produce ONLY the requested JSON."
         )
 
-        completion = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                temperature=0.1,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}]
+            )
 
-        content = completion.choices[0].message.content
-        return json.loads(content)
+            content = message.content[0].text.strip()
+
+            # Clean possible markdown fences
+            if content.startswith("```json"):
+                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+
+            result = json.loads(content)
+            print(f"Claude response received for {repo_name}")
+            return result
+
+        except (APIError, RateLimitError, APIConnectionError, json.JSONDecodeError) as e:
+            print(f"Claude API error: {str(e)}")
+            return {
+                "pillars": {},
+                "gen": {"uses_generative_ai": False, "score": 0, "reason": f"API error: {str(e)}"},
+                "overall_comment": f"Evaluation failed: {str(e)}"
+            }

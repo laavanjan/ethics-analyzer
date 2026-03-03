@@ -5,16 +5,9 @@ import os
 from typing import Optional, List, Dict
 from github import Auth, Github
 from dotenv import load_dotenv
-from ethics_analyzer import EthicsAnalyzer
+from ethics_analyzer import EthicsAnalyzer,FOCUS_PROFILES
 
 load_dotenv()
-
-# Focus profiles for user selection
-FOCUS_PROFILES = {
-    "1": ["P1", "P2", "P3"],                 # Responsibility & management
-    "2": ["P4", "P5", "P6", "P7", "P8"],     # Data safety & security
-    "3": ["P9", "P10", "P11"],               # Understanding, accessibility, impact
-}
 
 
 class GitHubConnector:

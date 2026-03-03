@@ -5,6 +5,14 @@ import re
 from llm_client import EthicsLLMClient
 
 
+# Focus profiles for user selection (moved here from github_connector.py)
+FOCUS_PROFILES = {
+    "1": ["P1", "P2", "P3"],                 # Responsibility & management
+    "2": ["P4", "P5", "P6", "P7", "P8"],     # Data safety & security
+    "3": ["P9", "P10", "P11"],               # Understanding, accessibility, impact
+}
+
+
 # ---------- Data structures ----------
 
 @dataclass
@@ -173,7 +181,7 @@ class EthicsAnalyzer:
         """
         lowered = content.lower()
 
-        # Simple rule: hard‑coded secrets -> security/privacy critical
+        # Simple rule: hard‑coded secrets → security/privacy critical
         if re.search(r"(api_key|secret_key|access_token)\s*=", lowered):
             self._add_issue(
                 file_path=file_path,
@@ -186,13 +194,13 @@ class EthicsAnalyzer:
             )
             self._mark_unsatisfied("SEC-03", file_path, "Hard‑coded secrets found.")
 
-        # Ethics config present -> some governance / docs controls satisfied
+        # Ethics config present → some governance / docs controls satisfied
         if "ethics_config.yml" in lowered or "ethics_config.yaml" in lowered:
             self._mark_satisfied("GOV-01", file_path)
             self._mark_satisfied("GOV-02", file_path)
             self._mark_satisfied("DOC-01", file_path)
 
-        # Logging of requests/responses -> traceability
+        # Logging of requests/responses → traceability
         if "logging" in lowered and ("request" in lowered or "response" in lowered):
             self._mark_satisfied("DOC-04", file_path, "Logging of requests/responses present.")
 
@@ -231,7 +239,7 @@ class EthicsAnalyzer:
                 focus_pillars=self.focus_pillars,
             )
 
-            # Fuse P1–P11 scores: 0/1/2 -> 0/50/100 and average with heuristic score
+            # Fuse P1–P11 scores: 0/1/2 → 0/50/100 and average with heuristic score
             pillar_scores = llm_result.get("pillars", {})
             if pillar_scores:
                 llm_total = 0.0
@@ -248,7 +256,7 @@ class EthicsAnalyzer:
                     gen_info = llm_result.get("gen")
                     if gen_info and gen_info.get("uses_generative_ai"):
                         gen_raw = max(0, min(2, gen_info.get("score", 0)))
-                        gen_score = gen_raw * 50  # 0/1/2 -> 0/50/100
+                        gen_score = gen_raw * 50  # 0/1/2 → 0/50/100
                         llm_score = (llm_score + gen_score) / 2.0
 
                     ethical_score = round((ethical_score + llm_score) / 2, 1)
