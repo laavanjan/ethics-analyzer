@@ -1,5 +1,5 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Any
 import re
 
 from llm_client import EthicsLLMClient
@@ -7,33 +7,24 @@ from llm_client import EthicsLLMClient
 
 # Focus profiles for user selection (moved here from github_connector.py)
 FOCUS_PROFILES = {
-    "1": ["P1", "P2", "P3"],                 # Responsibility & management
-    "2": ["P4", "P5", "P6", "P7", "P8"],     # Data safety & security
-    "3": ["P9", "P10", "P11"],               # Understanding, accessibility, impact
+    "1": ["P1", "P2", "P3"],  # Responsibility & management
+    "2": ["P4", "P5", "P6", "P7", "P8"],  # Data safety & security
+    "3": ["P9", "P10", "P11"],  # Understanding, accessibility, impact
 }
 
 
 # ---------- Data structures ----------
 
+
 @dataclass
 class EthicsIssue:
     file_path: str
     line_number: int
-    issue_type: str          # e.g. "governance", "privacy", "fairness"
-    severity: str            # "critical" | "high" | "medium" | "low"
+    issue_type: str  # e.g. "governance", "privacy", "fairness"
+    severity: str  # "critical" | "high" | "medium" | "low"
     message: str
     suggestion: str
     code_snippet: str = ""
-
-
-@dataclass
-class ControlStatus:
-    control_id: str          # e.g. "GOV-01"
-    pillar: str              # e.g. "P1"
-    name: str                # short description
-    satisfied: bool
-    evidence_files: List[str] = field(default_factory=list)
-    notes: Optional[str] = None
 
 
 class EthicsAnalyzer:
@@ -60,91 +51,68 @@ class EthicsAnalyzer:
         "P11": "societal",
     }
 
-    # Subset of PRIMARY controls per pillar (expand later)
-    PRIMARY_CONTROLS = {
-        # P1 Governance
-        "GOV-01": ("P1", "Ownership & accountability"),
-        "GOV-02": ("P1", "Documented purpose, scope, limits"),
-        "GOV-05": ("P1", "Human oversight plan"),
-        "GOV-06": ("P1", "Incident response / escalation"),
-        "GOV-08": ("P1", "Change management / versioning"),
+    # ---------- 3 RULES PER PILLAR (passed to LLM for evaluation) ----------
 
-        # P2 Risk
-        "RISK-01": ("P2", "System context captured"),
-        "RISK-02": ("P2", "Risk classification"),
-        "RISK-03": ("P2", "Ethical impact assessment"),
-        "RISK-06": ("P2", "Reassessment triggers"),
-
-        # P3 Human Oversight
-        "HUMO-01": ("P3", "Oversight roles defined"),
-        "HUMO-03": ("P3", "User recourse process"),
-
-        # P4 Privacy
-        "PRIV-01": ("P4", "Data minimization"),
-        "PRIV-02": ("P4", "Lawful basis / consent"),
-        "PRIV-03": ("P4", "Notice & transparency"),
-        "PRIV-04": ("P4", "Retention & deletion"),
-        "PRIV-05": ("P4", "Access control"),
-        "PRIV-06": ("P4", "Data provenance"),
-        "PRIV-08": ("P4", "De-identification evaluation"),
-
-        # P5 Fairness
-        "FAIR-01": ("P5", "Protected groups considered"),
-        "FAIR-02": ("P5", "Bias testing plan"),
-        "FAIR-03": ("P5", "Bias testing executed"),
-        "FAIR-04": ("P5", "Mitigation documented"),
-
-        # P6 Transparency
-        "TRAN-01": ("P6", "User-facing AI disclosure"),
-        "TRAN-02": ("P6", "Limitations & failure modes"),
-        "TRAN-04": ("P6", "Model/dataset documentation"),
-
-        # P7 Safety
-        "SAFE-01": ("P7", "Safety requirements & harms"),
-        "SAFE-02": ("P7", "Edge-case / stress testing"),
-        "SAFE-04": ("P7", "Safe fallback behaviour"),
-
-        # P8 Security
-        "SEC-01": ("P8", "Threat model"),
-        "SEC-02": ("P8", "Prompt injection / exfil"),
-        "SEC-03": ("P8", "Secure SDLC / secrets"),
-        "SEC-04": ("P8", "Abuse reporting / rate limit"),
-
-        # P9 Documentation
-        "DOC-01": ("P9", "System description pack"),
-        "DOC-02": ("P9", "Dataset documentation"),
-        "DOC-03": ("P9", "Model card"),
-        "DOC-04": ("P9", "Decision traceability"),
-
-        # P10 Accessibility
-        "ACC-01": ("P10", "Accessibility requirements"),
-        "ACC-03": ("P10", "Human‑factors hazards"),
-        "ACC-07": ("P10", "Avoid dark patterns"),
-
-        # P11 Societal
-        "SOC-01": ("P11", "Intended societal benefit"),
-        "SOC-02": ("P11", "Societal harms identified"),
-        "SOC-06": ("P11", "Dual‑use / misuse assessed"),
+    PILLAR_RULES: Dict[str, List[str]] = {
+        "P1": [
+            "Code or docs identify an owner, responsible team, or contact person.",
+            "There is a stated purpose, scope, or description of what the system does.",
+            "Version history, changelog, or change notes are present.",
+        ],
+        "P2": [
+            "Risk, harm, impact, or threat terms appear in code or documentation.",
+            "A risk level or classification (e.g. low/medium/high) is mentioned.",
+            "There is a trigger or mention of re-assessment after model or data changes.",
+        ],
+        "P3": [
+            "A human review, approval, or sign-off step is present.",
+            "A manual override, rollback, or fallback mechanism exists.",
+            "A user escalation, support, or recourse path is available.",
+        ],
+        "P4": [
+            "No unnecessary personal data is collected (minimal data fields).",
+            "Consent, legal basis, or privacy notice language is present.",
+            "Data retention, deletion, or expiry handling is implemented.",
+        ],
+        "P5": [
+            "Protected groups, bias, or fairness terms are acknowledged.",
+            "A bias testing plan, test dataset, or fairness metric is referenced.",
+            "Mitigation actions or fairness improvements are documented.",
+        ],
+        "P6": [
+            "Users are informed that they are interacting with AI.",
+            "Limitations, failure modes, or disclaimers are documented.",
+            "Model or data source information is available.",
+        ],
+        "P7": [
+            "Safety constraints, harmful output filters, or safety requirements are defined.",
+            "Edge-case, adversarial, or stress testing is present.",
+            "A safe fallback or deny response for risky or out-of-scope inputs exists.",
+        ],
+        "P8": [
+            "No hard-coded secrets, tokens, or passwords appear in code.",
+            "Authentication, authorization, or input validation is implemented.",
+            "Rate limiting, abuse detection, or anomaly controls are present.",
+        ],
+        "P9": [
+            "A README, system description, or overview document exists.",
+            "Data or model documentation is available.",
+            "Logging or decision traceability is implemented.",
+        ],
+        "P10": [
+            "Accessibility requirements or standards (e.g. WCAG) are referenced.",
+            "Error messages and UI feedback are clear and informative.",
+            "No deceptive UX patterns (dark patterns) are present.",
+        ],
+        "P11": [
+            "An intended social benefit or positive societal purpose is stated.",
+            "Potential societal harms or misuse risks are identified.",
+            "Dual-use risk or misuse assessment is documented.",
+        ],
     }
 
-    # ---------- GEN & REL overlays (derived from anchors) ----------
-
-    GEN_ANCHORS = {
-        "GEN-01": ["SAFE-01", "SAFE-04"],            # content safety
-        "GEN-02": ["TRAN-01", "TRAN-06"],            # disclosure (TRAN-06 inferred)
-        "GEN-03": ["TRAN-02", "SAFE-06", "TRAN-04"], # hallucination
-        "GEN-04": ["SEC-02", "PRIV-05"],             # prompt leakage
-        "GEN-05": ["PRIV-04", "PRIV-03"],            # retention boundaries
-        "GEN-06": ["SEC-04", "SAFE-06"],             # misuse monitoring
-    }
-
-    REL_ANCHORS = {
-        "REL-01": ["SEC-01", "PRIV-06", "PRIV-07"],  # vendor terms
-        "REL-02": ["SEC-03", "SEC-05"],              # dependency risk
-        "REL-03": ["SAFE-05", "GOV-04"],             # release risk
-        "REL-04": ["GOV-08", "TRAN-05"],             # distribution control
-        "REL-05": ["DOC-01", "DOC-08"],              # external docs
-    }
+    MIN_EFFECTIVE_LINES_PER_FILE = 3
+    MIN_EFFECTIVE_LINES_FOR_REPO_EVAL = 8
 
     def __init__(
         self,
@@ -155,22 +123,15 @@ class EthicsAnalyzer:
         # which pillars the user wants (P1–P11)
         self.focus_pillars = focus_pillars or list(self.PILLARS.keys())
 
-        # issues + control state
+        # issues
         self.issues: List[EthicsIssue] = []
-        self.controls: Dict[str, ControlStatus] = {
-            cid: ControlStatus(
-                control_id=cid,
-                pillar=self.PRIMARY_CONTROLS[cid][0],
-                name=self.PRIMARY_CONTROLS[cid][1],
-                satisfied=False,
-            )
-            for cid in self.PRIMARY_CONTROLS
-        }
 
         # LLM integration
         self.use_llm = use_llm
         self.llm_client = EthicsLLMClient(groq_api_key) if use_llm else None
         self._repo_snippets: List[str] = []  # accumulated code snippets for LLM
+        self._effective_lines_total = 0
+        self._files_with_enough_code = 0
 
     # ---------- Public API called from github_connector ----------
 
@@ -180,29 +141,29 @@ class EthicsAnalyzer:
         2) Accumulate truncated snippet for LLM P1–P11/GEN analysis.
         """
         lowered = content.lower()
+        effective_lines = self._count_effective_lines(content)
+        self._effective_lines_total += effective_lines
 
-        # Simple rule: hard‑coded secrets → security/privacy critical
-        if re.search(r"(api_key|secret_key|access_token)\s*=", lowered):
+        if effective_lines < self.MIN_EFFECTIVE_LINES_PER_FILE:
+            # Too little signal to evaluate ethics reliably for this file.
+            return
+
+        self._files_with_enough_code += 1
+
+        # Relaxed rule: flag only likely real secret assignments (avoid noisy matches)
+        if re.search(
+            r"(api[_-]?key|secret[_-]?key|access[_-]?token)\s*=\s*['\"][^'\"]{12,}['\"]",
+            lowered,
+        ):
             self._add_issue(
                 file_path=file_path,
                 line_number=1,
                 issue_type="security",
-                severity="critical",
+                severity="high",
                 message="Possible hard‑coded secret detected.",
                 suggestion="Move secrets to env vars or secret manager; rotate exposed keys.",
                 code_snippet="...api_key = '***'...",
             )
-            self._mark_unsatisfied("SEC-03", file_path, "Hard‑coded secrets found.")
-
-        # Ethics config present → some governance / docs controls satisfied
-        if "ethics_config.yml" in lowered or "ethics_config.yaml" in lowered:
-            self._mark_satisfied("GOV-01", file_path)
-            self._mark_satisfied("GOV-02", file_path)
-            self._mark_satisfied("DOC-01", file_path)
-
-        # Logging of requests/responses → traceability
-        if "logging" in lowered and ("request" in lowered or "response" in lowered):
-            self._mark_satisfied("DOC-04", file_path, "Logging of requests/responses present.")
 
         # Accumulate snippet for LLM – short, so LLM can quote it back
         snippet = content[:500]
@@ -213,53 +174,71 @@ class EthicsAnalyzer:
         Compute ethics score, derive overlays, and optionally fuse Groq LLM
         P1–P11 + GEN scores, restricted to focus_pillars.
         """
-        # 1) Deterministic score from PRIMARY controls
-        total_primary = len(self.controls)
-        satisfied_primary = sum(1 for c in self.controls.values() if c.satisfied)
-        ethical_score = round(100.0 * satisfied_primary / total_primary, 1) if total_primary else 100.0
+        # Baseline score — replaced by LLM pillar results when available
+        ethical_score = 50.0
 
         issues_by_severity: Dict[str, int] = {}
         issues_by_type: Dict[str, int] = {}
         for issue in self.issues:
-            issues_by_severity[issue.severity] = issues_by_severity.get(issue.severity, 0) + 1
-            issues_by_type[issue.issue_type] = issues_by_type.get(issue.issue_type, 0) + 1
-
-        overlays = {
-            "GEN": self._derive_overlay_status(self.GEN_ANCHORS),
-            "REL": self._derive_overlay_status(self.REL_ANCHORS),
-        }
-
-        # 2) Optional LLM evaluation for selected pillars + GEN overlay
-        llm_result = None
-        if self.use_llm and self.llm_client:
-            summary_text = "\n\n".join(self._repo_snippets)
-            llm_result = self.llm_client.evaluate_repo(
-                repo_name=repo_full_name,
-                files_summary=summary_text,
-                focus_pillars=self.focus_pillars,
+            issues_by_severity[issue.severity] = (
+                issues_by_severity.get(issue.severity, 0) + 1
+            )
+            issues_by_type[issue.issue_type] = (
+                issues_by_type.get(issue.issue_type, 0) + 1
             )
 
+        # LLM evaluation for selected pillars + GEN overlay
+        llm_result = None
+        if (
+            self._files_with_enough_code == 0
+            or self._effective_lines_total < self.MIN_EFFECTIVE_LINES_FOR_REPO_EVAL
+        ):
+            llm_result = {
+                "evaluation_status": "insufficient_code",
+                "pillars": {},
+                "gen": {
+                    "uses_generative_ai": False,
+                    "score": 0,
+                    "reason": "Not enough meaningful code to evaluate ethics reliably.",
+                },
+                "overall_comment": (
+                    "Skipped detailed ethics evaluation: repository has too little meaningful code "
+                    "(e.g., very short snippets/files)."
+                ),
+            }
+
+        if self.use_llm and self.llm_client:
+            if llm_result is None:
+                summary_text = "\n\n".join(self._repo_snippets)
+                llm_result = self.llm_client.evaluate_repo(
+                    repo_name=repo_full_name,
+                    files_summary=summary_text,
+                    focus_pillars=self.focus_pillars,
+                    pillar_rules=self.PILLAR_RULES,
+                )
+
             # Fuse P1–P11 scores: 0/1/2 → 0/50/100 and average with heuristic score
-            pillar_scores = llm_result.get("pillars", {})
-            if pillar_scores:
-                llm_total = 0.0
-                count = 0
-                for p in self.focus_pillars:
-                    if p in pillar_scores:
-                        s = pillar_scores[p].get("score", 0)
-                        llm_total += max(0, min(2, s)) * 50
-                        count += 1
-                if count:
-                    llm_score = llm_total / count
+            if llm_result.get("evaluation_status") != "insufficient_code":
+                pillar_scores = llm_result.get("pillars", {})
+                if pillar_scores:
+                    llm_total = 0.0
+                    count = 0
+                    for p in self.focus_pillars:
+                        if p in pillar_scores:
+                            s = pillar_scores[p].get("score", 0)
+                            llm_total += max(0, min(2, s)) * 50
+                            count += 1
+                    if count:
+                        llm_score = llm_total / count
 
-                    # Optional: blend GEN score if generative AI is used
-                    gen_info = llm_result.get("gen")
-                    if gen_info and gen_info.get("uses_generative_ai"):
-                        gen_raw = max(0, min(2, gen_info.get("score", 0)))
-                        gen_score = gen_raw * 50  # 0/1/2 → 0/50/100
-                        llm_score = (llm_score + gen_score) / 2.0
+                        # Optional: blend GEN score if generative AI is used
+                        gen_info = llm_result.get("gen")
+                        if gen_info and gen_info.get("uses_generative_ai"):
+                            gen_raw = max(0, min(2, gen_info.get("score", 0)))
+                            gen_score = gen_raw * 50  # 0/1/2 → 0/50/100
+                            llm_score = (llm_score + gen_score) / 2.0
 
-                    ethical_score = round((ethical_score + llm_score) / 2, 1)
+                        ethical_score = round(llm_score, 1)
 
         return {
             "ethical_score": ethical_score,
@@ -267,8 +246,6 @@ class EthicsAnalyzer:
             "issues_by_severity": issues_by_severity,
             "issues_by_type": issues_by_type,
             "issues": self.issues,
-            "controls": self.controls,
-            "overlays": overlays,
             "llm_result": llm_result,
             "focus_pillars": self.focus_pillars,
         }
@@ -297,36 +274,13 @@ class EthicsAnalyzer:
             )
         )
 
-    def _mark_satisfied(self, control_id: str, file_path: str, notes: Optional[str] = None):
-        if control_id in self.controls:
-            cs = self.controls[control_id]
-            cs.satisfied = True
-            if file_path not in cs.evidence_files:
-                cs.evidence_files.append(file_path)
-            if notes:
-                cs.notes = notes
-
-    def _mark_unsatisfied(self, control_id: str, file_path: str, notes: Optional[str] = None):
-        if control_id in self.controls:
-            cs = self.controls[control_id]
-            cs.satisfied = False
-            if file_path not in cs.evidence_files:
-                cs.evidence_files.append(file_path)
-            if notes:
-                cs.notes = notes
-
-    def _derive_overlay_status(self, mapping: Dict[str, List[str]]) -> Dict[str, str]:
-        status: Dict[str, str] = {}
-        for overlay_id, anchors in mapping.items():
-            anchor_controls = [self.controls[a] for a in anchors if a in self.controls]
-            if not anchor_controls:
-                status[overlay_id] = "not_applicable"
+    def _count_effective_lines(self, content: str) -> int:
+        count = 0
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line:
                 continue
-
-            if any(not c.satisfied and c.evidence_files for c in anchor_controls):
-                status[overlay_id] = "unmet"
-            elif all(c.satisfied for c in anchor_controls):
-                status[overlay_id] = "satisfied"
-            else:
-                status[overlay_id] = "conditional"
-        return status
+            if line.startswith("#") or line.startswith("//"):
+                continue
+            count += 1
+        return count
