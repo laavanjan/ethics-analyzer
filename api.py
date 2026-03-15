@@ -7,23 +7,28 @@ import os
 import json
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from github_connector import GitHubConnector, create_ethics_issue
-from ethics_analyzer import EthicsAnalyzer, FOCUS_PROFILES
+from ethics_analyzer import (
+    EthicsAnalyzer,
+    normalize_focus_profile_name,
+    resolve_focus_profile,
+)
 from llm_client import EthicsLLMClient
 
 app = FastAPI(
     title="Ethics Code Analyzer API",
     description="API for analyzing code repositories or snippets for ethical compliance",
-    version="0.1.0"
+    version="0.1.0",
 )
 
 
 class AnalyzeRequest(BaseModel):
-    mode: str = "github"                     # "github" or "local"
-    github_token: Optional[str] = None       # required only for github mode
-    repo_full_name: Optional[str] = None     # required for github
+    mode: str = "github"  # "github" or "local"
+    github_token: Optional[str] = None  # required only for github mode
+    repo_full_name: Optional[str] = None  # required for github
     snippets: Optional[Dict[str, str]] = None  # required for local
     focus_profile: str = "2"
     languages: Optional[List[str]] = None
@@ -35,14 +40,14 @@ class AnalyzeRequest(BaseModel):
 async def analyze(body: AnalyzeRequest):
     """
     Analyze GitHub repo or local code snippets.
-    
+
     - github mode: requires github_token and repo_full_name
     - local mode: requires snippets
     - Optional: create_github_issue, save_json_report
     """
     mode = body.mode
-    focus_profile = body.focus_profile
-    focus_pillars = FOCUS_PROFILES.get(focus_profile, FOCUS_PROFILES["2"])
+    focus_profile = normalize_focus_profile_name(body.focus_profile)
+    focus_pillars = resolve_focus_profile(body.focus_profile)
 
     # Prepare base response early
     response = {
@@ -58,7 +63,7 @@ async def analyze(body: AnalyzeRequest):
         "json_saved": False,
         "saved_file": None,
         "issue_error": None,
-        "issue_skipped_reason": None
+        "issue_skipped_reason": None,
     }
 
     connector = None
@@ -75,10 +80,16 @@ async def analyze(body: AnalyzeRequest):
 
         repo = connector.get_repository(body.repo_full_name)
         if not repo:
-            raise HTTPException(404, "Repository not found or token has insufficient permissions")
+            raise HTTPException(
+                404, "Repository not found or token has insufficient permissions"
+            )
 
         code_files = connector.list_code_files(repo, languages=body.languages)
-        all_files = [fp for files in code_files.values() for fp in files]
+        code_file_paths = [fp for files in code_files.values() for fp in files]
+        ethics_doc_files = connector.list_ethics_doc_files(repo)
+        code_set = set(code_file_paths)
+        extra_doc_files = [fp for fp in ethics_doc_files if fp not in code_set]
+        all_files = extra_doc_files + code_file_paths
 
         analyzer = EthicsAnalyzer(
             use_llm=True,
@@ -94,6 +105,7 @@ async def analyze(body: AnalyzeRequest):
 
         response["repo_full_name"] = body.repo_full_name
         response["files_scanned"] = len(all_files)
+        response["analyzed_files"] = all_files
 
     elif mode == "local":
         if not body.snippets or not isinstance(body.snippets, dict):
@@ -133,7 +145,9 @@ async def analyze(body: AnalyzeRequest):
 
     # JSON saving (both modes)
     if body.save_json_report:
-        repo_name_safe = body.repo_full_name.replace("/", "_") if mode == "github" else "local"
+        repo_name_safe = (
+            body.repo_full_name.replace("/", "_") if mode == "github" else "local"
+        )
         filename = f"ethics_report_{repo_name_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         save_path = f"./reports/{filename}"
         os.makedirs("./reports", exist_ok=True)

@@ -6,11 +6,6 @@ from typing import Dict, List, Optional
 
 import streamlit as st
 
-try:
-    from streamlit_keyup import st_keyup
-except Exception:
-    st_keyup = None
-
 from ethics_analyzer import EthicsAnalyzer
 from github_connector import GitHubConnector, create_ethics_issue
 
