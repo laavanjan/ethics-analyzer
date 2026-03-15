@@ -7,10 +7,33 @@ from llm_client import EthicsLLMClient
 
 # Focus profiles for user selection (moved here from github_connector.py)
 FOCUS_PROFILES = {
-    "1": ["P1", "P2", "P3"],  # Responsibility & management
-    "2": ["P4", "P5", "P6", "P7", "P8"],  # Data safety & security
-    "3": ["P9", "P10", "P11"],  # Understanding, accessibility, impact
+    "Responsibility & management": ["P1", "P2", "P3"],  #
+    "Data safety & security": ["P4", "P5", "P6", "P7", "P8"],  #
+    "Understanding, accessibility, impact": [
+        "P9",
+        "P10",
+        "P11",
+    ],  # Understanding, accessibility, impact
 }
+
+DEFAULT_FOCUS_PROFILE = "Data safety & security"
+
+FOCUS_PROFILE_ALIASES = {
+    "1": "Responsibility & management",
+    "2": "Data safety & security",
+    "3": "Understanding, accessibility, impact",
+}
+
+
+def normalize_focus_profile_name(profile_choice: Optional[str]) -> str:
+    if not profile_choice:
+        return DEFAULT_FOCUS_PROFILE
+    return FOCUS_PROFILE_ALIASES.get(profile_choice, profile_choice)
+
+
+def resolve_focus_profile(profile_choice: Optional[str]) -> List[str]:
+    profile_name = normalize_focus_profile_name(profile_choice)
+    return FOCUS_PROFILES.get(profile_name, FOCUS_PROFILES[DEFAULT_FOCUS_PROFILE])
 
 
 # ---------- Data structures ----------
@@ -51,68 +74,74 @@ class EthicsAnalyzer:
         "P11": "societal",
     }
 
-    # ---------- 3 RULES PER PILLAR (passed to LLM for evaluation) ----------
+    # ---------- 3 SIMPLE QUESTIONS PER PILLAR (passed to LLM for evaluation) ----------
 
     PILLAR_RULES: Dict[str, List[str]] = {
         "P1": [
-            "Code or docs identify an owner, responsible team, or contact person.",
-            "There is a stated purpose, scope, or description of what the system does.",
-            "Version history, changelog, or change notes are present.",
+            "Is there a clear owner or team responsible for this system?",
+            "Is it clearly explained what this system is meant to do?",
+            "Can users see what changed over time (version history or changelog)?",
         ],
         "P2": [
-            "Risk, harm, impact, or threat terms appear in code or documentation.",
-            "A risk level or classification (e.g. low/medium/high) is mentioned.",
-            "There is a trigger or mention of re-assessment after model or data changes.",
+            "Does the project mention possible risks or harms?",
+            "Are risks grouped by level (for example low, medium, high)?",
+            "Is there a plan to review risks again after major changes?",
         ],
         "P3": [
-            "A human review, approval, or sign-off step is present.",
-            "A manual override, rollback, or fallback mechanism exists.",
-            "A user escalation, support, or recourse path is available.",
+            "Is there a human review or approval step?",
+            "Can a person stop, override, or roll back the system if needed?",
+            "Is there a clear support or escalation path for users?",
         ],
         "P4": [
-            "No unnecessary personal data is collected (minimal data fields).",
-            "Consent, legal basis, or privacy notice language is present.",
-            "Data retention, deletion, or expiry handling is implemented.",
+            "Does the system collect only the data it really needs?",
+            "Is consent or privacy notice information clearly provided?",
+            "Is there a clear policy for data deletion or retention?",
         ],
         "P5": [
-            "Protected groups, bias, or fairness terms are acknowledged.",
-            "A bias testing plan, test dataset, or fairness metric is referenced.",
-            "Mitigation actions or fairness improvements are documented.",
+            "Does the project acknowledge fairness or bias concerns?",
+            "Is there any fairness testing or measurement approach?",
+            "Are there actions to reduce unfair outcomes?",
         ],
         "P6": [
-            "Users are informed that they are interacting with AI.",
-            "Limitations, failure modes, or disclaimers are documented.",
-            "Model or data source information is available.",
+            "Are users clearly told they are interacting with AI?",
+            "Are system limits or failure cases explained in plain language?",
+            "Is there basic information about the model or data source?",
         ],
         "P7": [
-            "Safety constraints, harmful output filters, or safety requirements are defined.",
-            "Edge-case, adversarial, or stress testing is present.",
-            "A safe fallback or deny response for risky or out-of-scope inputs exists.",
+            "Are safety guardrails defined for harmful or risky outputs?",
+            "Has the system been tested on edge cases or stressful inputs?",
+            "Does it have a safe fallback for risky or unsupported requests?",
         ],
         "P8": [
-            "No hard-coded secrets, tokens, or passwords appear in code.",
-            "Authentication, authorization, or input validation is implemented.",
-            "Rate limiting, abuse detection, or anomaly controls are present.",
+            "Are secrets and keys kept out of source code?",
+            "Are access control and input validation checks in place?",
+            "Are there protections against abuse (like rate limits)?",
         ],
         "P9": [
-            "A README, system description, or overview document exists.",
-            "Data or model documentation is available.",
-            "Logging or decision traceability is implemented.",
+            "Is there a clear README or system overview?",
+            "Is there documentation for data or model behavior?",
+            "Can important decisions be traced through logs?",
         ],
         "P10": [
-            "Accessibility requirements or standards (e.g. WCAG) are referenced.",
-            "Error messages and UI feedback are clear and informative.",
-            "No deceptive UX patterns (dark patterns) are present.",
+            "Are accessibility needs or standards considered?",
+            "Are error messages easy to understand for normal users?",
+            "Does the interface avoid misleading or deceptive patterns?",
         ],
         "P11": [
-            "An intended social benefit or positive societal purpose is stated.",
-            "Potential societal harms or misuse risks are identified.",
-            "Dual-use risk or misuse assessment is documented.",
+            "Is there a clear positive social purpose for this system?",
+            "Are possible misuse risks or social harms discussed?",
+            "Is there any plan to reduce misuse or harmful impact?",
         ],
     }
 
     MIN_EFFECTIVE_LINES_PER_FILE = 3
     MIN_EFFECTIVE_LINES_FOR_REPO_EVAL = 8
+    QUESTION_PASS_SCORE_MAP = {
+        0: 0,
+        1: 50,
+        2: 75,
+        3: 100,
+    }
 
     def __init__(
         self,
@@ -193,13 +222,16 @@ class EthicsAnalyzer:
             self._files_with_enough_code == 0
             or self._effective_lines_total < self.MIN_EFFECTIVE_LINES_FOR_REPO_EVAL
         ):
+            insufficient_reason = (
+                "Not enough meaningful code to evaluate ethics reliably."
+            )
             llm_result = {
                 "evaluation_status": "insufficient_code",
-                "pillars": {},
+                "pillars": self._build_placeholder_pillars(insufficient_reason),
                 "gen": {
                     "uses_generative_ai": False,
                     "score": 0,
-                    "reason": "Not enough meaningful code to evaluate ethics reliably.",
+                    "reason": insufficient_reason,
                 },
                 "overall_comment": (
                     "Skipped detailed ethics evaluation: repository has too little meaningful code "
@@ -225,8 +257,23 @@ class EthicsAnalyzer:
                     count = 0
                     for p in self.focus_pillars:
                         if p in pillar_scores:
-                            s = pillar_scores[p].get("score", 0)
-                            llm_total += max(0, min(2, s)) * 50
+                            pillar_entry = pillar_scores[p]
+                            question_results = pillar_entry.get("rules", {})
+
+                            if isinstance(question_results, dict) and question_results:
+                                passed_count = sum(
+                                    1
+                                    for question in question_results.values()
+                                    if isinstance(question, dict)
+                                    and question.get("passed") is True
+                                )
+                                llm_total += self.QUESTION_PASS_SCORE_MAP.get(
+                                    passed_count, 0
+                                )
+                            else:
+                                s_raw = pillar_entry.get("score", 0)
+                                s = s_raw if isinstance(s_raw, (int, float)) else 0
+                                llm_total += max(0, min(2, s)) * 50
                             count += 1
                     if count:
                         llm_score = llm_total / count
@@ -284,3 +331,43 @@ class EthicsAnalyzer:
                 continue
             count += 1
         return count
+
+    @staticmethod
+    def count_passed_questions(pillar_entry: Optional[Dict[str, Any]]) -> Optional[int]:
+        if not isinstance(pillar_entry, dict):
+            return None
+
+        question_results = pillar_entry.get("rules", {})
+        if not isinstance(question_results, dict) or not question_results:
+            return None
+
+        return sum(
+            1
+            for question in question_results.values()
+            if isinstance(question, dict) and question.get("passed") is True
+        )
+
+    @classmethod
+    def get_pillar_status_label(cls, pillar_entry: Optional[Dict[str, Any]]) -> str:
+        passed_count = cls.count_passed_questions(pillar_entry)
+        if passed_count is None:
+            return "NOT EVALUATED"
+        if passed_count == 0:
+            return "FAIL"
+        if passed_count == 3:
+            return "STRONG PASS"
+        return "PARTIAL PASS"
+
+    def _build_placeholder_pillars(self, reason: str) -> Dict[str, Dict[str, Any]]:
+        placeholders: Dict[str, Dict[str, Any]] = {}
+        for pillar_id in self.focus_pillars:
+            rule_reasons = {
+                str(index): {"passed": False, "reason": reason}
+                for index, _ in enumerate(self.PILLAR_RULES.get(pillar_id, []), start=1)
+            }
+            placeholders[pillar_id] = {
+                "score": None,
+                "verdict": "not_evaluated",
+                "rules": rule_reasons,
+            }
+        return placeholders

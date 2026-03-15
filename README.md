@@ -44,6 +44,15 @@ uvicorn api:app --reload --port 8000
 Open interactive docs:  
 → http://127.0.0.1:8000/docs
 
+### 4. Start Streamlit chat UI (optional)
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Then open:  
+→ http://localhost:8501
+
 ## How to Get a GitHub Personal Access Token (Classic)
 
 You need this token to scan repositories (especially private ones) or create issues.

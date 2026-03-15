@@ -13,4 +13,6 @@ dependencies = [
     "groq>=1.0.0",
     "pygithub>=2.8.1",
     "python-dotenv>=1.2.1",
+    "streamlit>=1.42.0",
+    "streamlit-keyup>=0.2.4",
 ]

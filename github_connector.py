@@ -5,7 +5,14 @@ import os
 from typing import Optional, List, Dict
 from github import Auth, Github
 from dotenv import load_dotenv
-from ethics_analyzer import EthicsAnalyzer, FOCUS_PROFILES
+from ethics_analyzer import (
+    EthicsAnalyzer,
+    FOCUS_PROFILES,
+    DEFAULT_FOCUS_PROFILE,
+    FOCUS_PROFILE_ALIASES,
+    normalize_focus_profile_name,
+    resolve_focus_profile,
+)
 
 load_dotenv()
 
@@ -114,6 +121,84 @@ class GitHubConnector:
     def list_python_files(self, repo):
         code_files = self.list_code_files(repo, languages=["python"])
         return code_files.get("python", [])
+
+    def list_ethics_doc_files(self, repo) -> List[str]:
+        """Fetch all ethics-relevant non-code files:
+        README, CHANGELOG, SECURITY, LICENSE, CONTRIBUTING,
+        docs/ folder, .github/ configs, and top-level .yml/.yaml/.env.example files.
+        """
+        # Exact filenames to look for anywhere in the repo (case-insensitive name match)
+        TARGET_NAMES = {
+            "readme.md",
+            "readme.txt",
+            "readme.rst",
+            "readme",
+            "changelog.md",
+            "changelog.txt",
+            "changelog",
+            "security.md",
+            "security.txt",
+            "security",
+            "license",
+            "license.md",
+            "license.txt",
+            "contributing.md",
+            "contributing.txt",
+            "contributing",
+            "code_of_conduct.md",
+            "privacy.md",
+            "privacy-policy.md",
+            "terms.md",
+            "terms-of-service.md",
+        }
+        # Extensions to capture inside docs/ and .github/
+        DOC_EXTENSIONS = {".md", ".txt", ".rst", ".yaml", ".yml"}
+        # Top-level config extensions always captured
+        TOP_LEVEL_CONFIG_EXTENSIONS = {".yml", ".yaml"}
+        # Prefixes for paths to scan deeply (not just root)
+        DEEP_SCAN_DIRS = {"docs", ".github"}
+
+        found: List[str] = []
+        try:
+            contents = repo.get_contents("")
+            stack = list(contents)
+            while stack:
+                item = stack.pop(0)
+                if item.type == "dir":
+                    dir_name = item.path.split("/")[0].lower()
+                    if dir_name in DEEP_SCAN_DIRS or item.path.lower().startswith(
+                        tuple(DEEP_SCAN_DIRS)
+                    ):
+                        try:
+                            stack.extend(repo.get_contents(item.path))
+                        except Exception:
+                            pass
+                else:
+                    name_lower = item.name.lower()
+                    path_lower = item.path.lower()
+                    depth = item.path.count("/")
+                    top_dir = path_lower.split("/")[0] if "/" in path_lower else ""
+
+                    if name_lower in TARGET_NAMES:
+                        found.append(item.path)
+                    elif top_dir in DEEP_SCAN_DIRS:
+                        _, ext = os.path.splitext(name_lower)
+                        if ext in DOC_EXTENSIONS:
+                            found.append(item.path)
+                    elif depth == 0:
+                        _, ext = os.path.splitext(name_lower)
+                        if ext in TOP_LEVEL_CONFIG_EXTENSIONS:
+                            found.append(item.path)
+        except Exception as e:
+            print(f"✗ Error scanning ethics docs: {e}")
+
+        if found:
+            print(f"\n📄 Ethics-relevant docs found ({len(found)}):")
+            for f in found:
+                print(f"  {f}")
+        else:
+            print("\n📄 No ethics-relevant docs found (README, CHANGELOG, etc.)")
+        return found
 
     def get_file_content(self, repo, file_path: str) -> str:
         try:
@@ -307,8 +392,11 @@ def run_ethics_analysis(connector, repo):
     print("1. Responsibility & management (P1–P3)")
     print("2. Data safety and security (P4–P8)")
     print("3. Understanding, accessibility, and societal impact (P9–P11)")
-    focus_choice = input("Choice (1-3, default=2): ").strip() or "2"
-    focus_pillars = FOCUS_PROFILES.get(focus_choice, FOCUS_PROFILES["2"])
+    print("You can also paste the full profile name.")
+    focus_choice = input("Choice (1-3 or profile name, default=2): ").strip() or "2"
+    focus_profile_name = normalize_focus_profile_name(focus_choice)
+    focus_pillars = resolve_focus_profile(focus_choice)
+    print(f"Selected focus profile: {focus_profile_name}")
 
     print("\n" + "=" * 60)
     print("LANGUAGE SELECTION")
@@ -396,14 +484,21 @@ def run_ethics_analysis(connector, repo):
         for pid in focus_pillars:
             p = pillars_raw.get(pid, {})
             score = p.get("score")
-            verdict = (p.get("verdict") or ("pass" if isinstance(score, (int, float)) and score >= 1 else "fail")).upper()
+            verdict = (
+                p.get("verdict")
+                or (
+                    "pass" if isinstance(score, (int, float)) and score >= 1 else "fail"
+                )
+            ).upper()
             print(f"\n  {pid} ({EthicsAnalyzer.PILLARS[pid]}): {verdict}")
             rules_data = p.get("rules", {})
             if rules_data:
                 for rule_num in sorted(rules_data.keys(), key=lambda x: int(x)):
                     rule_result = rules_data[rule_num]
                     passed_str = "PASS" if rule_result.get("passed") else "FAIL"
-                    print(f"     Rule {rule_num} [{passed_str}]: {rule_result.get('reason', '')}")
+                    print(
+                        f"     Rule {rule_num} [{passed_str}]: {rule_result.get('reason', '')}"
+                    )
             elif p.get("reason"):
                 print(f"     reason: {p.get('reason')}")
 
@@ -486,8 +581,11 @@ def analyze_local_code(snippets: Dict[str, str]):
     print("1. Responsibility & management (P1–P3)")
     print("2. Data safety and security (P4–P8)")
     print("3. Understanding, accessibility, and societal impact (P9–P11)")
-    focus_choice = input("Choice (1-3, default=2): ").strip() or "2"
-    focus_pillars = FOCUS_PROFILES.get(focus_choice, FOCUS_PROFILES["2"])
+    print("You can also paste the full profile name.")
+    focus_choice = input("Choice (1-3 or profile name, default=2): ").strip() or "2"
+    focus_profile_name = normalize_focus_profile_name(focus_choice)
+    focus_pillars = resolve_focus_profile(focus_choice)
+    print(f"Selected focus profile: {focus_profile_name}")
 
     analyzer = EthicsAnalyzer(
         use_llm=True,
@@ -524,14 +622,21 @@ def analyze_local_code(snippets: Dict[str, str]):
         for pid in focus_pillars:
             p = pillars_raw.get(pid, {})
             score = p.get("score")
-            verdict = (p.get("verdict") or ("pass" if isinstance(score, (int, float)) and score >= 1 else "fail")).upper()
+            verdict = (
+                p.get("verdict")
+                or (
+                    "pass" if isinstance(score, (int, float)) and score >= 1 else "fail"
+                )
+            ).upper()
             print(f"\n  {pid} ({EthicsAnalyzer.PILLARS[pid]}): {verdict}")
             rules_data = p.get("rules", {})
             if rules_data:
                 for rule_num in sorted(rules_data.keys(), key=lambda x: int(x)):
                     rule_result = rules_data[rule_num]
                     passed_str = "PASS" if rule_result.get("passed") else "FAIL"
-                    print(f"     Rule {rule_num} [{passed_str}]: {rule_result.get('reason', '')}")
+                    print(
+                        f"     Rule {rule_num} [{passed_str}]: {rule_result.get('reason', '')}"
+                    )
             elif p.get("reason"):
                 print(f"     reason: {p.get('reason')}")
 
