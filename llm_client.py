@@ -197,6 +197,22 @@ class EthicsLLMClient:
         normalized.setdefault("overall_comment", fallback_reason)
         return normalized
 
+    def _extract_json_payload(self, content: str) -> str:
+        text = (content or "").strip()
+        if not text:
+            return "{}"
+
+        if text.startswith("```json"):
+            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif text.startswith("```"):
+            text = text.split("```", 1)[1].split("```", 1)[0].strip()
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return text[start : end + 1]
+        return text
+
     def evaluate_repo(
         self,
         repo_name: str,
@@ -281,7 +297,7 @@ class EthicsLLMClient:
         try:
             message = self.client.messages.create(
                 model=self.model,
-                max_tokens=2000,
+                max_tokens=12000,
                 temperature=0.1,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
@@ -289,11 +305,8 @@ class EthicsLLMClient:
 
             content = message.content[0].text.strip()
 
-            # Clean possible markdown fences
-            if content.startswith("```json"):
-                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-
-            result = json.loads(content)
+            json_payload = self._extract_json_payload(content)
+            result = json.loads(json_payload)
             result = self._normalize_llm_result(result, focus_pillars, pillar_rules)
             print(f"Claude response received for {repo_name}")
             return result
