@@ -2,7 +2,7 @@
 
 import os
 import json
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from dotenv import load_dotenv
 from anthropic import Anthropic, APIError, RateLimitError, APIConnectionError
 
@@ -213,6 +213,64 @@ class EthicsLLMClient:
             return text[start : end + 1]
         return text
 
+    def _attempt_json_repair(
+        self,
+        malformed_content: str,
+        focus_pillars: List[str],
+        pillar_rules: Optional[Dict[str, List[str]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Ask the model to repair malformed/truncated JSON into valid schema JSON.
+        Returns parsed dict if successful, otherwise None.
+        """
+        focus_str = ", ".join(focus_pillars)
+
+        rules_lines: List[str] = []
+        if pillar_rules:
+            for pid in focus_pillars:
+                if pid in pillar_rules:
+                    rules_lines.append(f"{pid}:")
+                    for i, rule in enumerate(pillar_rules[pid], 1):
+                        rules_lines.append(f"{i}. {rule}")
+        rules_block = "\n".join(rules_lines)
+
+        repair_system_prompt = (
+            "You repair malformed JSON into valid strict JSON. "
+            "Return only JSON, no markdown. "
+            f"Keep only these pillars: {focus_str}.\n"
+            "Required schema:\n"
+            "{\n"
+            '  "pillars": {"P1": {"score": int|null, "verdict": "pass"|"fail"|"not_evaluated", '
+            '"rules": {"1": {"passed": bool, "reason": str, "evidence": str, "suggestion": str}, '
+            '"2": {"passed": bool, "reason": str, "evidence": str, "suggestion": str}, '
+            '"3": {"passed": bool, "reason": str, "evidence": str, "suggestion": str}}}},\n'
+            '  "gen": {"uses_generative_ai": bool, "score": int, "reason": str},\n'
+            '  "overall_comment": str\n'
+            "}\n"
+            "If data is missing, fill conservative defaults and keep valid JSON."
+        )
+
+        repair_user_message = (
+            "Repair this malformed JSON into the required schema.\n\n"
+            f"Pillar questions:\n{rules_block}\n\n"
+            "Malformed content:\n"
+            f"{malformed_content}"
+        )
+
+        try:
+            repair_message = self.client.messages.create(
+                model=self.model,
+                max_tokens=6000,
+                temperature=0,
+                system=repair_system_prompt,
+                messages=[{"role": "user", "content": repair_user_message}],
+            )
+            repaired_text = repair_message.content[0].text.strip()
+            repaired_payload = self._extract_json_payload(repaired_text)
+            return json.loads(repaired_payload)
+        except Exception:
+            return None
+
     def evaluate_repo(
         self,
         repo_name: str,
@@ -306,7 +364,17 @@ class EthicsLLMClient:
             content = message.content[0].text.strip()
 
             json_payload = self._extract_json_payload(content)
-            result = json.loads(json_payload)
+            try:
+                result = json.loads(json_payload)
+            except json.JSONDecodeError:
+                repaired = self._attempt_json_repair(
+                    malformed_content=content,
+                    focus_pillars=focus_pillars,
+                    pillar_rules=pillar_rules,
+                )
+                if repaired is None:
+                    raise
+                result = repaired
             result = self._normalize_llm_result(result, focus_pillars, pillar_rules)
             print(f"Claude response received for {repo_name}")
             return result
