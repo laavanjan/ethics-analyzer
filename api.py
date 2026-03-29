@@ -1,35 +1,96 @@
-# api.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import datetime
 import os
 import json
-
 from dotenv import load_dotenv
 
 load_dotenv()
-
 from github_connector import GitHubConnector, create_ethics_issue
 from ethics_analyzer import (
     EthicsAnalyzer,
     normalize_focus_profile_name,
     resolve_focus_profile,
 )
-from llm_client import EthicsLLMClient
-
 app = FastAPI(
     title="Ethics Code Analyzer API",
     description="API for analyzing code repositories or snippets for ethical compliance",
     version="0.1.0",
 )
 
+# Helper to list code files in a git repo (with optional language filter)
+@app.post("/api/ethics/git-list-files")
+async def git_list_files(
+    repo_url: str,
+    branch: str = "main",
+    languages: Optional[List[str]] = Query(None),
+):
+    """
+    List all code files in a git repo, optionally filtered by language extension.
+    """
+    from git_connector import GitConnector
+    import fnmatch
+
+    CODE_EXTENSIONS = {
+        "python": ["*.py"],
+        "javascript": ["*.js", "*.jsx"],
+        "typescript": ["*.ts", "*.tsx"],
+        "java": ["*.java"],
+        "csharp": ["*.cs"],
+        "go": ["*.go"],
+        "ruby": ["*.rb"],
+        "php": ["*.php"],
+        "c": ["*.c", "*.h"],
+        "cpp": ["*.cpp", "*.hpp", "*.cc", "*.cxx"],
+        "kotlin": ["*.kt", "*.kts"],
+        "scala": ["*.scala"],
+        "rust": ["*.rs"],
+        "shell": ["*.sh"],
+        "yaml": ["*.yml", "*.yaml"],
+        "json": ["*.json"],
+        "markdown": ["*.md"],
+    }
+    connector = GitConnector(repo_url, branch=branch)
+    try:
+        repo_path = connector.clone_repo()
+        seen = set()
+        file_list = []
+        for root, dirs, files in os.walk(repo_path):
+            # Skip .git and other hidden internal directories
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for file in files:
+                rel_path = os.path.relpath(os.path.join(root, file), repo_path)
+                rel_path = rel_path.replace("\\", "/")
+                if rel_path not in seen:
+                    seen.add(rel_path)
+                    file_list.append(rel_path)
+        # Filter by language if provided
+        if languages:
+            patterns = [
+                pat
+                for lang in languages
+                for pat in CODE_EXTENSIONS.get(lang.lower(), [])
+            ]
+            file_list = [
+                f
+                for f in file_list
+                if any(fnmatch.fnmatch(f.lower(), pat) for pat in patterns)
+            ]
+        return {"files": sorted(file_list)}
+    finally:
+        connector.cleanup()
+
 
 class AnalyzeRequest(BaseModel):
-    mode: str = "github"  # "github" or "local"
+    mode: str = "github"  # "github", "local", or "git"
     github_token: Optional[str] = None  # required only for github mode
     repo_full_name: Optional[str] = None  # required for github
     snippets: Optional[Dict[str, str]] = None  # required for local
+    # For generic git mode:
+    repo_url: Optional[str] = None  # required for git mode
+    branch: Optional[str] = "main"  # optional for git mode
+    file_paths: Optional[List[str]] = None  # required for git mode
     focus_profile: str = "2"
     languages: Optional[List[str]] = None
     create_github_issue: bool = False
@@ -124,8 +185,38 @@ async def analyze(body: AnalyzeRequest):
 
         response["files_scanned"] = len(body.snippets)
 
+    elif mode == "git":
+        from git_connector import GitConnector
+
+        if not body.repo_url:
+            raise HTTPException(400, "repo_url is required for git mode")
+        if not body.file_paths or not isinstance(body.file_paths, list):
+            raise HTTPException(400, "file_paths must be a non-empty list for git mode")
+        connector = GitConnector(body.repo_url, branch=body.branch or "main")
+        try:
+            connector.clone_repo()
+            analyzer = EthicsAnalyzer(
+                use_llm=True,
+                focus_pillars=focus_pillars,
+            )
+            for file_path in body.file_paths:
+                try:
+                    content = connector.get_file_content(file_path)
+                except Exception as e:
+                    content = None
+                if content:
+                    analyzer.analyze_file(file_path, content)
+            report = analyzer.generate_report(body.repo_url)
+            response["repo_full_name"] = body.repo_url
+            response["files_scanned"] = len(body.file_paths)
+            response["analyzed_files"] = body.file_paths
+        finally:
+            connector.cleanup()
+            connector = None  # already cleaned up; prevent close() call below
     else:
-        raise HTTPException(status_code=400, detail="mode must be 'github' or 'local'")
+        raise HTTPException(
+            status_code=400, detail="mode must be 'github', 'local', or 'git'"
+        )
 
     # Update response with analysis results
     response.update(report)

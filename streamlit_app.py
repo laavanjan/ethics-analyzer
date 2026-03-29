@@ -316,7 +316,7 @@ def main():
 
     with st.sidebar:
         st.header("Settings")
-        mode = st.selectbox("Mode", ["github", "local"], index=0)
+        mode = st.selectbox("Mode", ["github", "local", "git"], index=0)
         default_pillar_names = (
             ["governance"] if "governance" in PILLAR_NAME_TO_ID else []
         )
@@ -342,6 +342,9 @@ def main():
         create_issue = False
         selected_languages: List[str] = []
         github_token = ""
+        repo_url = ""
+        branch = "main"
+        file_paths = ""
         if mode == "github":
             github_token = st.text_input(
                 "GitHub Token",
@@ -354,6 +357,104 @@ def main():
                 options=list(GitHubConnector.SUPPORTED_LANGUAGES.keys()),
                 default=[],
             )
+        elif mode == "git":
+            repo_url = st.text_input(
+                "Git Repo URL (Bitbucket, GitHub, etc.)",
+                value="",
+                help="Paste the HTTPS URL of the repo (public or private with credentials)",
+            )
+            branch = st.text_input(
+                "Branch",
+                value="main",
+                help="Branch to analyze (default: main)",
+            )
+            # Language filter for git mode
+            code_languages = [
+                "python",
+                "javascript",
+                "typescript",
+                "java",
+                "csharp",
+                "go",
+                "ruby",
+                "php",
+                "c",
+                "cpp",
+                "kotlin",
+                "scala",
+                "rust",
+                "shell",
+                "yaml",
+                "json",
+                "markdown",
+            ]
+            selected_git_languages = st.multiselect(
+                "Languages (optional)",
+                options=code_languages,
+                default=[],
+                help="Filter files by language extension.",
+            )
+            fetch_files = st.button("Fetch files from repo", key="fetch_git_files")
+            git_file_options = []
+            if repo_url and fetch_files:
+                import requests
+
+                api_url = os.getenv(
+                    "API_URL", "http://localhost:8000/api/ethics/git-list-files"
+                )
+                params = {
+                    "repo_url": repo_url,
+                    "branch": branch,
+                }
+                if selected_git_languages:
+                    for lang in selected_git_languages:
+                        params.setdefault("languages", []).append(lang)
+                with st.spinner("Fetching file list from repo..."):
+                    response = requests.post(api_url, params=params)
+                    if response.status_code == 200:
+                        git_file_options = response.json().get("files", [])
+                    else:
+                        st.error(f"Failed to fetch files: {response.text}")
+            # Use session state to persist file selection and fetched options
+            if "selected_git_files" not in st.session_state:
+                st.session_state.selected_git_files = []
+            if "git_file_options_cache" not in st.session_state:
+                st.session_state.git_file_options_cache = []
+
+            if git_file_options:
+                # New fetch — reset cache and set all checkbox keys to True
+                if git_file_options != st.session_state.git_file_options_cache:
+                    st.session_state.git_file_options_cache = git_file_options
+                    for f in git_file_options:
+                        st.session_state[f"git_file_{f}"] = True
+
+            available_files = st.session_state.git_file_options_cache
+            if available_files:
+                col_a, col_b = st.columns(2)
+                # Write directly to session_state keys so checkboxes reflect the change
+                if col_a.button("Select all", key="git_select_all"):
+                    for f in available_files:
+                        st.session_state[f"git_file_{f}"] = True
+                if col_b.button("Clear all", key="git_clear_all"):
+                    for f in available_files:
+                        st.session_state[f"git_file_{f}"] = False
+
+                selected_set = set()
+                with st.container(height=260):
+                    for f in available_files:
+                        # Initialise key for files that haven't been rendered yet
+                        if f"git_file_{f}" not in st.session_state:
+                            st.session_state[f"git_file_{f}"] = True
+                        checked = st.checkbox(f, key=f"git_file_{f}")
+                        if checked:
+                            selected_set.add(f)
+
+                st.caption(f"{len(selected_set)} / {len(available_files)} files selected")
+                st.session_state.selected_git_files = [
+                    f for f in available_files if f in selected_set
+                ]
+
+            file_paths = "\n".join(st.session_state.selected_git_files)
 
     repo_full_name = ""
     local_file_name = "app.py"
@@ -388,7 +489,7 @@ def main():
                 st.warning("No repositories match the filter.")
         else:
             repo_full_name = st.text_input("Repository (owner/repo)")
-    else:
+    elif mode == "local":
         st.subheader("Local File")
         local_file_name = st.text_input(
             "File name",
@@ -399,6 +500,12 @@ def main():
             "Code",
             value='API_KEY = "abc123xyz456"\nprint("hello")',
             height=240,
+        )
+
+    elif mode == "git":
+        st.subheader("Git Repo File(s)")
+        st.markdown(
+            "Enter the repo URL, branch, and fetch files to select for analysis."
         )
 
     run_button = st.button("Analyze", type="primary")
@@ -447,7 +554,7 @@ def main():
                 analyzed_files=result.get("analyzed_files"),
             )
 
-        else:
+        elif mode == "local":
             if not local_file_name:
                 raise ValueError("File name is required in local mode.")
             if not local_file_code.strip():
@@ -474,6 +581,49 @@ def main():
                 "local",
                 None,
                 analyzed_files=result.get("analyzed_files"),
+            )
+
+        elif mode == "git":
+            if not repo_url:
+                raise ValueError("Repo URL is required in git mode.")
+            if not file_paths.strip():
+                raise ValueError("At least one file path is required in git mode.")
+            file_path_list = [
+                fp.strip() for fp in file_paths.splitlines() if fp.strip()
+            ]
+            if not file_path_list:
+                raise ValueError("At least one valid file path is required.")
+
+            import requests
+
+            api_url = os.getenv("API_URL", "http://localhost:8000/api/ethics/analyze")
+            payload = {
+                "mode": "git",
+                "repo_url": repo_url,
+                "branch": branch,
+                "file_paths": file_path_list,
+                "focus_profile": (
+                    selected_pillar_ids[0] if len(selected_pillar_ids) == 1 else "2"
+                ),
+                "languages": [],
+                "save_json_report": save_json,
+            }
+            with st.spinner("Analyzing git repo files..."):
+                response = requests.post(api_url, json=payload)
+                if response.status_code != 200:
+                    raise ValueError(f"API error: {response.text}")
+                result = response.json()
+            report = result
+            files_scanned = result.get("files_scanned", len(file_path_list))
+            analyzed_files = result.get("analyzed_files", file_path_list)
+            if save_json and result.get("json_saved"):
+                st.success(f"Report saved to: {result.get('saved_file')}")
+            _render_report_tabs(
+                report,
+                files_scanned,
+                "git",
+                repo_url,
+                analyzed_files=analyzed_files,
             )
 
     except Exception as error:

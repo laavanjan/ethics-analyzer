@@ -27,7 +27,7 @@ class EthicsLLMClient:
         self.client = Anthropic()
 
         # Use a valid model name from your screenshot
-        self.model = model or "claude-haiku-4-5"  # ← recommended default
+        self.model = model or "claude-haiku-4-5-20251001"
 
         print(f"Claude client initialized with model: {self.model}")
 
