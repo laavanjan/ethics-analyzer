@@ -4,9 +4,12 @@ import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
+import fnmatch
+
 import streamlit as st
 
 from ethics_analyzer import EthicsAnalyzer
+from git_connector import GitConnector
 from github_connector import GitHubConnector, create_ethics_issue
 
 
@@ -296,6 +299,86 @@ def _analyze_local(snippets: Dict[str, str], selected_pillar_ids: List[str]) -> 
     }
 
 
+_CODE_EXTENSIONS: Dict[str, List[str]] = {
+    "python": ["*.py"],
+    "javascript": ["*.js", "*.jsx"],
+    "typescript": ["*.ts", "*.tsx"],
+    "java": ["*.java"],
+    "csharp": ["*.cs"],
+    "go": ["*.go"],
+    "ruby": ["*.rb"],
+    "php": ["*.php"],
+    "c": ["*.c", "*.h"],
+    "cpp": ["*.cpp", "*.hpp", "*.cc", "*.cxx"],
+    "kotlin": ["*.kt", "*.kts"],
+    "scala": ["*.scala"],
+    "rust": ["*.rs"],
+    "shell": ["*.sh"],
+    "yaml": ["*.yml", "*.yaml"],
+    "json": ["*.json"],
+    "markdown": ["*.md"],
+}
+
+
+def _list_git_files(
+    repo_url: str,
+    branch: str,
+    languages: Optional[List[str]] = None,
+) -> List[str]:
+    connector = GitConnector(repo_url, branch=branch)
+    try:
+        repo_path = connector.clone_repo()
+        seen: set = set()
+        file_list: List[str] = []
+        for root, dirs, files in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for file in files:
+                rel_path = os.path.relpath(os.path.join(root, file), repo_path)
+                rel_path = rel_path.replace("\\", "/")
+                if rel_path not in seen:
+                    seen.add(rel_path)
+                    file_list.append(rel_path)
+        if languages:
+            patterns = [
+                pat
+                for lang in languages
+                for pat in _CODE_EXTENSIONS.get(lang.lower(), [])
+            ]
+            file_list = [
+                f for f in file_list if any(fnmatch.fnmatch(f.lower(), pat) for pat in patterns)
+            ]
+        return sorted(file_list)
+    finally:
+        connector.cleanup()
+
+
+def _analyze_git(
+    repo_url: str,
+    branch: str,
+    file_path_list: List[str],
+    selected_pillar_ids: List[str],
+) -> Dict:
+    connector = GitConnector(repo_url, branch=branch)
+    try:
+        connector.clone_repo()
+        analyzer = EthicsAnalyzer(use_llm=True, focus_pillars=selected_pillar_ids)
+        for file_path in file_path_list:
+            try:
+                content = connector.get_file_content(file_path)
+            except Exception:
+                content = None
+            if content:
+                analyzer.analyze_file(file_path, content)
+        report = analyzer.generate_report(repo_url)
+        return {
+            "report": report,
+            "files_scanned": len(file_path_list),
+            "analyzed_files": file_path_list,
+        }
+    finally:
+        connector.cleanup()
+
+
 @st.cache_data(ttl=600)
 def _load_user_repository_names(github_token: str) -> List[str]:
     connector = None
@@ -397,24 +480,15 @@ def main():
             fetch_files = st.button("Fetch files from repo", key="fetch_git_files")
             git_file_options = []
             if repo_url and fetch_files:
-                import requests
-
-                api_url = os.getenv(
-                    "API_URL", "http://localhost:8000/api/ethics/git-list-files"
-                )
-                params = {
-                    "repo_url": repo_url,
-                    "branch": branch,
-                }
-                if selected_git_languages:
-                    for lang in selected_git_languages:
-                        params.setdefault("languages", []).append(lang)
                 with st.spinner("Fetching file list from repo..."):
-                    response = requests.post(api_url, params=params)
-                    if response.status_code == 200:
-                        git_file_options = response.json().get("files", [])
-                    else:
-                        st.error(f"Failed to fetch files: {response.text}")
+                    try:
+                        git_file_options = _list_git_files(
+                            repo_url,
+                            branch,
+                            languages=selected_git_languages or None,
+                        )
+                    except Exception as e:
+                        st.error(f"Failed to fetch files: {e}")
             # Use session state to persist file selection and fetched options
             if "selected_git_files" not in st.session_state:
                 st.session_state.selected_git_files = []
@@ -594,30 +668,22 @@ def main():
             if not file_path_list:
                 raise ValueError("At least one valid file path is required.")
 
-            import requests
-
-            api_url = os.getenv("API_URL", "http://localhost:8000/api/ethics/analyze")
-            payload = {
-                "mode": "git",
-                "repo_url": repo_url,
-                "branch": branch,
-                "file_paths": file_path_list,
-                "focus_profile": (
-                    selected_pillar_ids[0] if len(selected_pillar_ids) == 1 else "2"
-                ),
-                "languages": [],
-                "save_json_report": save_json,
-            }
             with st.spinner("Analyzing git repo files..."):
-                response = requests.post(api_url, json=payload)
-                if response.status_code != 200:
-                    raise ValueError(f"API error: {response.text}")
-                result = response.json()
-            report = result
-            files_scanned = result.get("files_scanned", len(file_path_list))
-            analyzed_files = result.get("analyzed_files", file_path_list)
-            if save_json and result.get("json_saved"):
-                st.success(f"Report saved to: {result.get('saved_file')}")
+                result = _analyze_git(
+                    repo_url=repo_url,
+                    branch=branch,
+                    file_path_list=file_path_list,
+                    selected_pillar_ids=selected_pillar_ids,
+                )
+
+            report = result["report"]
+            files_scanned = result["files_scanned"]
+            analyzed_files = result["analyzed_files"]
+
+            if save_json:
+                saved_file = _save_report(report, mode="git", repo_full_name=repo_url)
+                st.success(f"Report saved to: {saved_file}")
+
             _render_report_tabs(
                 report,
                 files_scanned,
