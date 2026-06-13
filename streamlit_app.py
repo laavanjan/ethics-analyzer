@@ -397,6 +397,16 @@ def main():
     st.title("🛡️ Ethics Analyzer")
     st.caption("Simple ethics analysis for GitHub repositories or local snippets.")
 
+    # PRIV-03 — AI use disclosure. Shown on every page load.
+    st.info(
+        "🤖 **AI-assisted analysis.** This tool sends summarised code snippets to "
+        "Anthropic's Claude API to evaluate ethics pillars. Findings and "
+        "suggestions are AI-generated and should be reviewed by a human before "
+        "acting on them. Repository tokens and file contents are processed in "
+        "memory only — see [PRIVACY.md](https://github.com/laavanjan/ethics-analyzer/blob/main/PRIVACY.md) for what is retained.",
+        icon="🤖",
+    )
+
     with st.sidebar:
         st.header("Settings")
         mode = st.selectbox("Mode", ["github", "local", "git"], index=0)

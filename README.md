@@ -364,6 +364,26 @@ Returns: `{ "files": ["src/app.py", "README.md", ...] }`
 - Never commit your `.env` file — it's in `.gitignore`
 - Use minimal scopes on GitHub tokens
 - All git clones go into OS temp folders and are deleted after analysis
+- Set `ETHICS_API_KEY` in your environment to require an `X-API-Key` header on every endpoint (defaults to off for local dev)
+
+---
+
+## AI Use Disclosure
+
+This tool sends summarised code snippets to **Anthropic Claude Haiku** for the
+qualitative ethics evaluation. The results — pillar verdicts, evidence, and
+remediation suggestions — are **AI-generated** and must be reviewed by a human
+before being used as a basis for action. A persistent banner is shown in the
+Streamlit UI on every page load.
+
+**What is sent to Claude:** summarised file snippets only — typically the first
+few hundred lines of each file you select.
+**What is NOT sent:** your GitHub or Anthropic API tokens, full file contents,
+or any user identity beyond the repo's owner/name.
+
+See [PRIVACY.md](./PRIVACY.md) for the full data-handling breakdown, the
+30-day retention policy on `./reports/`, and the optional API-key access
+control for non-local deployments.
 
 ---
 

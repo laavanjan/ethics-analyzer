@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -13,11 +13,31 @@ from ethics_analyzer import (
     normalize_focus_profile_name,
     resolve_focus_profile,
 )
+from logging_utils import redact_sensitive
+
 app = FastAPI(
     title="Ethics Code Analyzer API",
     description="API for analyzing code repositories or snippets for ethical compliance",
     version="0.1.0",
 )
+
+
+# ── PRIV-05: optional API key guard ──────────────────────────────────────────
+# When ETHICS_API_KEY is set in the environment, every protected endpoint
+# requires a matching `X-API-Key` header. When unset (the default for local
+# development), routes stay open so the existing UX is unchanged.
+def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
+    expected = os.getenv("ETHICS_API_KEY")
+    if not expected:
+        return
+    if x_api_key != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
+
+
+def _safe_detail(exc: Exception) -> str:
+    """PRIV-01: redact secrets out of error messages before they reach the wire."""
+    return redact_sensitive(exc)
+
 
 # Helper to list code files in a git repo (with optional language filter)
 @app.post("/api/ethics/git-list-files")
@@ -25,6 +45,7 @@ async def git_list_files(
     repo_url: str,
     branch: str = "main",
     languages: Optional[List[str]] = Query(None),
+    _auth: None = Depends(require_api_key),
 ):
     """
     List all code files in a git repo, optionally filtered by language extension.
@@ -98,7 +119,7 @@ class AnalyzeRequest(BaseModel):
 
 
 @app.post("/api/ethics/analyze")
-async def analyze(body: AnalyzeRequest):
+async def analyze(body: AnalyzeRequest, _auth: None = Depends(require_api_key)):
     """
     Analyze GitHub repo or local code snippets.
 
@@ -229,7 +250,7 @@ async def analyze(body: AnalyzeRequest):
                 response["issue_created"] = True
             except Exception as e:
                 response["issue_created"] = False
-                response["issue_error"] = str(e)
+                response["issue_error"] = _safe_detail(e)
         else:
             response["issue_created"] = False
             response["issue_skipped_reason"] = "Score >= 50 – no critical issues"
