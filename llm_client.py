@@ -2,6 +2,7 @@
 
 import os
 import json
+from datetime import datetime, timezone
 from typing import Any, List, Dict, Optional
 from dotenv import load_dotenv
 from anthropic import Anthropic, APIError, RateLimitError, APIConnectionError
@@ -195,6 +196,16 @@ class EthicsLLMClient:
             },
         )
         normalized.setdefault("overall_comment", fallback_reason)
+
+        # AI disclosure metadata — lets the UI clearly label this output as
+        # machine-generated, and records which model produced it and when.
+        normalized["ai_generated"] = True
+        normalized["ai_disclosure"] = (
+            "AI-Generated Response: produced by an automated language model. "
+            "Findings may contain errors and should be reviewed by a human."
+        )
+        normalized["model"] = self.model
+        normalized["generated_at"] = datetime.now(timezone.utc).isoformat()
         return normalized
 
     def _extract_json_payload(self, content: str) -> str:

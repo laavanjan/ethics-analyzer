@@ -370,16 +370,35 @@ Returns: `{ "files": ["src/app.py", "README.md", ...] }`
 
 ## AI Use Disclosure
 
-This tool sends summarised code snippets to **Anthropic Claude Haiku** for the
-qualitative ethics evaluation. The results — pillar verdicts, evidence, and
-remediation suggestions — are **AI-generated** and must be reviewed by a human
-before being used as a basis for action. A persistent banner is shown in the
-Streamlit UI on every page load.
+**You are interacting with an AI assistant.** This tool uses AI/LLM technology
+(**Anthropic Claude Haiku**) for the qualitative ethics evaluation. Every pillar
+verdict, evidence note, remediation suggestion, and overall comment is
+**AI-generated** by a machine-learning model — not written or verified by a
+person — and may contain errors.
 
-**What is sent to Claude:** summarised file snippets only — typically the first
-few hundred lines of each file you select.
-**What is NOT sent:** your GitHub or Anthropic API tokens, full file contents,
-or any user identity beyond the repo's owner/name.
+This same disclosure is surfaced in the Streamlit UI on every page load: a
+persistent banner states that the user is interacting with an AI, an
+**"About this AI Assistant"** expander explains the AI nature, data use, and
+limitations, and each result set is labelled with the model name and generation
+timestamp.
+
+**How your data is used**
+- The code snippets, documentation, and repository name you submit are sent to
+  Anthropic's Claude API to produce the analysis.
+- **What is sent to Claude:** summarised file snippets only — typically the
+  first few hundred lines of each file you select.
+- **What is NOT sent:** your GitHub or Anthropic API tokens, full file contents,
+  or any user identity beyond the repo's owner/name.
+- Repository tokens and file contents are processed **in memory only** and are
+  not persisted beyond the optional JSON report you choose to save locally.
+
+**Limitations**
+- The model can be wrong, miss context, or produce inconsistent scores between
+  runs. Results are a starting point, not a compliance guarantee or legal advice.
+
+**When human review is recommended**
+- Always review findings before acting on them — and especially before filing
+  issues, making compliance decisions, or sharing results externally.
 
 See [PRIVACY.md](./PRIVACY.md) for the full data-handling breakdown, the
 30-day retention policy on `./reports/`, and the optional API-key access

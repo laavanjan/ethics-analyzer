@@ -86,6 +86,18 @@ def _render_llm_results(report: Dict):
     if llm_result.get("evaluation_status") == "insufficient_code":
         st.warning("Not evaluated: insufficient meaningful code.")
 
+    # AI disclosure label, rendered before any AI output the user reads.
+    if llm_result.get("ai_generated"):
+        disclosure = llm_result.get(
+            "ai_disclosure", "AI-Generated Response."
+        )
+        model_name = llm_result.get("model", "unknown model")
+        generated_at = llm_result.get("generated_at", "")
+        meta_suffix = f" · Model: {model_name}"
+        if generated_at:
+            meta_suffix += f" · Generated: {generated_at}"
+        st.caption(f"🤖 {disclosure}{meta_suffix}")
+
     pillars = llm_result.get("pillars", {})
     focus_pillars = report.get("focus_pillars", list(pillars.keys()))
 
@@ -397,15 +409,41 @@ def main():
     st.title("🛡️ Ethics Analyzer")
     st.caption("Simple ethics analysis for GitHub repositories or local snippets.")
 
-    # PRIV-03 — AI use disclosure. Shown on every page load.
-    st.info(
-        "🤖 **AI-assisted analysis.** This tool sends summarised code snippets to "
-        "Anthropic's Claude API to evaluate ethics pillars. Findings and "
-        "suggestions are AI-generated and should be reviewed by a human before "
-        "acting on them. Repository tokens and file contents are processed in "
-        "memory only — see [PRIVACY.md](https://github.com/laavanjan/ethics-analyzer/blob/main/PRIVACY.md) for what is retained.",
+    # PRIV-03 / TRANS — AI use disclosure. Shown on every page load.
+    st.warning(
+        "🤖 **You are interacting with an AI assistant.** Responses are generated "
+        "by a machine-learning model (Anthropic's Claude) and may contain errors. "
+        "Findings and suggestions are AI-generated and should be reviewed by a "
+        "human before acting on them.",
         icon="🤖",
     )
+
+    # Transparency / documentation parity — explains the AI nature of the system,
+    # how user data is used, limitations, and when human review is recommended.
+    with st.expander("ℹ️ About this AI Assistant", expanded=False):
+        st.markdown(
+            "**What this is**\n"
+            "- This tool uses AI/LLM technology (Anthropic's Claude API) to "
+            "evaluate code and documentation against ethics pillars.\n"
+            "- Every pillar assessment, suggestion, and overall comment is "
+            "**AI-generated**, not written or verified by a person.\n\n"
+            "**How your data is used**\n"
+            "- The code snippets, documentation, and repository name you submit are "
+            "sent to Anthropic's Claude API to produce the analysis.\n"
+            "- Repository tokens and file contents are processed **in memory only** "
+            "and are not persisted by this app beyond the optional JSON report you "
+            "choose to save locally.\n"
+            "- See [PRIVACY.md](https://github.com/laavanjan/ethics-analyzer/blob/main/PRIVACY.md) "
+            "for full details on what is retained.\n\n"
+            "**Limitations**\n"
+            "- The model can be wrong, miss context, or produce inconsistent scores "
+            "between runs.\n"
+            "- Results are a starting point, not a compliance guarantee or legal advice.\n\n"
+            "**When human review is recommended**\n"
+            "- Always review findings before acting on them — and especially before "
+            "filing issues, making compliance decisions, or sharing results "
+            "externally."
+        )
 
     with st.sidebar:
         st.header("Settings")
