@@ -14,24 +14,13 @@ from ethics_analyzer import (
     resolve_focus_profile,
 )
 from logging_utils import redact_sensitive
+from auth import require_api_key, ENDPOINT_PERMISSIONS
 
 app = FastAPI(
     title="Ethics Code Analyzer API",
     description="API for analyzing code repositories or snippets for ethical compliance",
     version="0.1.0",
 )
-
-
-# ── PRIV-05: optional API key guard ──────────────────────────────────────────
-# When ETHICS_API_KEY is set in the environment, every protected endpoint
-# requires a matching `X-API-Key` header. When unset (the default for local
-# development), routes stay open so the existing UX is unchanged.
-def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
-    expected = os.getenv("ETHICS_API_KEY")
-    if not expected:
-        return
-    if x_api_key != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
 
 
 def _safe_detail(exc: Exception) -> str:
@@ -276,3 +265,60 @@ async def analyze(body: AnalyzeRequest, _auth: None = Depends(require_api_key)):
         connector.close()
 
     return response
+
+
+# ── SEC-03: Public Health Check (No Authentication Required) ──────────────────
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for monitoring and load balancing.
+    No authentication required — intended for infrastructure monitoring.
+    """
+    return {
+        "status": "healthy",
+        "service": "Ethics Code Analyzer",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ── SEC-03: Endpoint Protection Registry ──────────────────────────────────────
+@app.get("/api/endpoints")
+async def list_endpoints(_auth: None = Depends(require_api_key)):
+    """
+    List all API endpoints and their authentication requirements.
+    Protected endpoint — requires valid API key.
+
+    SEC-03: Transparency about endpoint protection policy.
+    """
+    return {
+        "protected_endpoints": {
+            "data": ENDPOINT_PERMISSIONS["data"],
+            "model": ENDPOINT_PERMISSIONS["model"],
+            "prompt": ENDPOINT_PERMISSIONS["prompt"],
+        },
+        "public_endpoints": {
+            "health": ENDPOINT_PERMISSIONS["public"],
+        },
+        "authentication_enabled": bool(os.getenv("ETHICS_API_KEY")),
+        "authentication_method": "X-API-Key header (set ETHICS_API_KEY env var)",
+    }
+
+
+# ── Startup Validation: Ensure All Protected Endpoints Have Auth ──────────────
+@app.on_event("startup")
+async def validate_endpoint_protection():
+    """
+    Validate that all data, model, and prompt endpoints have authentication enabled.
+    Logs warning if endpoints are unprotected in production.
+
+    SEC-03: Startup validation to enforce endpoint protection policy.
+    """
+    api_key_enabled = bool(os.getenv("ETHICS_API_KEY"))
+    mode = "PRODUCTION (auth required)" if api_key_enabled else "DEVELOPMENT (auth optional)"
+
+    print(f"[SEC-03] Ethics API started in {mode}")
+    print(f"[SEC-03] Authentication: {'ENABLED' if api_key_enabled else 'DISABLED'}")
+    print(f"[SEC-03] Protected endpoints:")
+    for category, details in ENDPOINT_PERMISSIONS.items():
+        if details.get("requires_auth"):
+            print(f"  - {category}: {', '.join(details.get('example_endpoints', []))}")

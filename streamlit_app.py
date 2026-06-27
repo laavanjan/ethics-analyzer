@@ -404,8 +404,51 @@ def _load_user_repository_names(github_token: str) -> List[str]:
             connector.close()
 
 
+def _check_streamlit_auth():
+    """
+    SEC-03: Enforce authentication for Streamlit app if API_KEY is set.
+    Redirects unauthenticated users to login page.
+    """
+    api_key_required = os.getenv("ETHICS_API_KEY")
+
+    # Development mode: skip auth
+    if not api_key_required:
+        return
+
+    # Production mode: require authentication
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.set_page_config(page_title="Ethics Analyzer - Login", page_icon="🛡️")
+        st.title("🛡️ Ethics Analyzer - Authentication Required")
+
+        with st.container():
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.markdown("### Please authenticate to continue")
+                api_key_input = st.text_input(
+                    "API Key",
+                    type="password",
+                    help="Enter your API key (X-API-Key header value)"
+                )
+
+                if st.button("Login", type="primary"):
+                    if api_key_input == api_key_required:
+                        st.session_state.authenticated = True
+                        st.rerun()
+                    else:
+                        st.error("Invalid API key. Please try again.")
+
+        st.stop()
+
+
 def main():
     st.set_page_config(page_title="Ethics Analyzer", page_icon="🛡️", layout="wide")
+
+    # SEC-03: Check authentication before rendering app
+    _check_streamlit_auth()
+
     st.title("🛡️ Ethics Analyzer")
     st.caption("Simple ethics analysis for GitHub repositories or local snippets.")
 

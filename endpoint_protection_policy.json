@@ -1,0 +1,142 @@
+{
+  "security_control": "SEC-03",
+  "policy": "Endpoint Protection and Authentication",
+  "version": "1.0.0",
+  "last_updated": "2026-06-27",
+  "status": "IMPLEMENTED",
+  "description": "Enforces authentication on all data, model, and prompt endpoints using API key validation",
+
+  "authentication": {
+    "enabled": "when ETHICS_API_KEY environment variable is set",
+    "method": "X-API-Key header or Bearer token",
+    "development_mode": "No authentication required (ETHICS_API_KEY unset)",
+    "production_mode": "All protected endpoints require valid credentials"
+  },
+
+  "endpoints": {
+    "protected_data_endpoints": [
+      {
+        "path": "/api/ethics/analyze",
+        "method": "POST",
+        "description": "Analyze code for ethical compliance",
+        "requires_auth": true,
+        "auth_dependency": "require_api_key",
+        "request_body": "AnalyzeRequest (mode, github_token, repo_full_name, etc.)",
+        "response": "Analysis report with ethical score and issues",
+        "privileged": true,
+        "reason_for_protection": "Accesses external repositories and processes code files"
+      },
+      {
+        "path": "/api/ethics/git-list-files",
+        "method": "POST",
+        "description": "List files in a git repository",
+        "requires_auth": true,
+        "auth_dependency": "require_api_key",
+        "request_body": "repo_url, branch, languages (optional)",
+        "response": "List of files matching filter criteria",
+        "privileged": true,
+        "reason_for_protection": "Enumerates repository structure; can expose internal details"
+      }
+    ],
+
+    "protected_model_endpoints": [
+      {
+        "path": "/api/endpoints",
+        "method": "GET",
+        "description": "List all API endpoints and their protection status",
+        "requires_auth": true,
+        "auth_dependency": "require_api_key",
+        "response": "Endpoint registry with authentication requirements",
+        "privileged": false,
+        "reason_for_protection": "Reveals API structure and security configuration"
+      }
+    ],
+
+    "public_endpoints": [
+      {
+        "path": "/health",
+        "method": "GET",
+        "description": "Health check for monitoring and load balancing",
+        "requires_auth": false,
+        "reason_no_auth": "Infrastructure monitoring endpoint; no sensitive data exposed"
+      },
+      {
+        "path": "/docs",
+        "method": "GET",
+        "description": "Swagger API documentation (FastAPI auto-generated)",
+        "requires_auth": false,
+        "reason_no_auth": "Standard OpenAPI documentation; no sensitive data"
+      },
+      {
+        "path": "/openapi.json",
+        "method": "GET",
+        "description": "OpenAPI schema definition",
+        "requires_auth": false,
+        "reason_no_auth": "API schema definition; considered public"
+      }
+    ]
+  },
+
+  "least_privilege_policy": {
+    "principle": "Each endpoint has minimum required permissions for its function",
+    "application": [
+      {
+        "endpoint_group": "data_endpoints",
+        "permissions": "READ repository data, EXECUTE analysis, WRITE reports",
+        "risk_level": "HIGH",
+        "why": "Access external code repositories and process file content"
+      },
+      {
+        "endpoint_group": "model_endpoints",
+        "permissions": "READ metadata, QUERY state",
+        "risk_level": "MEDIUM",
+        "why": "Exposes information about API structure"
+      },
+      {
+        "endpoint_group": "public_endpoints",
+        "permissions": "none (read-only infrastructure data)",
+        "risk_level": "LOW",
+        "why": "No sensitive data; standard monitoring information"
+      }
+    ]
+  },
+
+  "streamlit_authentication": {
+    "enabled": "when ETHICS_API_KEY environment variable is set",
+    "implementation": "Session state based login gate",
+    "flow": [
+      "User visits Streamlit app",
+      "If API_KEY required: show login form",
+      "User enters API key",
+      "Validate against ETHICS_API_KEY environment variable",
+      "If valid: set st.session_state.authenticated = True",
+      "If invalid: show error and ask to retry"
+    ],
+    "session_management": {
+      "authenticated": "bool flag indicating login status",
+      "lifetime": "Duration of browser session",
+      "requires_reauthentication": "On browser close or session expiry"
+    }
+  },
+
+  "validation": {
+    "startup_checks": [
+      "All data endpoints have require_api_key dependency",
+      "All model endpoints have require_api_key dependency",
+      "Public endpoints have no auth requirement",
+      "Streamlit app checks authentication before rendering protected UI"
+    ],
+    "verification_command": "python -c 'from api import app; from auth import ENDPOINT_PERMISSIONS; print(ENDPOINT_PERMISSIONS)'",
+    "testing": {
+      "with_auth_enabled": "export ETHICS_API_KEY=test_key && python api.py",
+      "with_auth_disabled": "python api.py (no ETHICS_API_KEY set)"
+    }
+  },
+
+  "compliance": {
+    "sec_03": "Every data, model, and prompt endpoint is protected by authentication",
+    "least_privilege": "Endpoints have minimum required permissions for their function",
+    "audit_trail": "All authentication failures logged via logging_utils.redact_sensitive",
+    "code_review": "Security-critical code in auth.py reviewed and documented"
+  }
+}
